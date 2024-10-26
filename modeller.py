@@ -67,7 +67,14 @@ class Scaler:
 
 
 class Modeller:
+    """
+    seasonality_period: int=1 //1 mean no seasonality used
+    seasonality_model in ['discrete', 'fourier']
+    seasonality_num_fouries_terms: int=None   // если не специфицировано будет seasonality_period / 4
+    """
     seasonality = 1
+    seasonality_model: str
+    seasonality_num_fouries_terms: int = None
     model_name: str
     model_type: str
 
@@ -84,9 +91,15 @@ class Modeller:
     struct_sites: list
 
 
-    def __init__(self, model_name, seasonality: int=1) -> None:
-        # type in ['sales', 'brand']
-        self.seasonality = seasonality
+    def __init__(self, 
+                 model_name, 
+                 seasonality_period: int=1, 
+                 seasonality_model='discrete', 
+                 seasonality_num_fouries_terms: int=None) -> None:
+        assert seasonality_model in ['discrete', 'fourier']
+        self.seasonality = seasonality_period
+        self.seasonality_model = seasonality_model
+        self.seasonality_num_fouries_terms = seasonality_num_fouries_terms
         self.model_name = model_name
 
     def CheckFixSpec(self, spec):
@@ -95,17 +108,8 @@ class Modeller:
                 spec['y'] = spec['y'][0]
         return spec
     
-    def SetChartsSpec(self):
-        self.base_sites = ['base']
-        self.struct_sites = []
-        if self.seasonality > 1:
-            self.base_sites.append('seasonal')
-        for s in self.spec['X']:
-            if 'media' not in s:
-                self.struct_sites.append(s)
-
     @staticmethod
-    def PrepareFouriesSeasonalityX(data_len, seasonality, num_terms):
+    def PrepareFouriesSeasonalityX(data_len: int, seasonality: int, num_terms: int) -> np.array:
         fourier_terms = []
         fourier_names = []
         time_axis = np.arange(data_len)
@@ -155,6 +159,12 @@ class Modeller:
         
         if MEDIA_COMP in self.spec['X']:
             self.X[MEDIA_COMP] = Modeller.PrepareMediaX(self.input_df[self.spec['X'][MEDIA_COMP]])
+
+        if self.seasonality_model == 'fourier' and self.seasonality > 1:
+            if self.seasonality_num_fouries_terms is None:
+                self.seasonality_num_fouries_terms = self.seasonality / 4
+            self.X[FOURIER_SEASONALITY] = Modeller.PrepareFouriesSeasonalityX(
+                data_len=len(self.y), seasonality=self.seasonality, num_terms=self.seasonality_num_fouries_terms)
 
         return True
     
@@ -222,7 +232,18 @@ class Modeller:
 
 
 
-        
+    def SetChartsSpec(self):
+        # только base level
+        self.base_sites = [MODEL_BASE]
+
+        # все кроме base and media
+        self.struct_sites = []
+        if self.seasonality > 1:
+            self.struct_sites.append(MODEL_SEASONAL)
+        for s in self.spec['X']:
+            if 'media' not in s:
+                self.struct_sites.append(s)
+    
 
 
 
@@ -262,10 +283,14 @@ class Modeller:
         self.SetChartsSpec()
         fig, axs = plt.subplots(1, 1, figsize=(16, 6))
         
+        # all struct + seasonal as lines 
         if self.struct_sites:
-            self.decomposition[self.struct_sites].plot.line(ax=axs)
-        self.decomposition[self.base_sites].sum(axis=1).plot.area(ax=axs, linewidth=0, alpha=0.2)
-        axs.set_ylim(-0.4, 1)
+            self.decomposition[self.struct_sites].plot.line(ax=axs, label='Base level')
+        # base as area 
+        self.decomposition[self.base_sites].plot.area(ax=axs, linewidth=0, alpha=0.2)
+        axs.set_ylim(-0.4, 1.2)
+        axs.legend()
+
         
         
     def PlotMediaDecomposition(self):

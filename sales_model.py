@@ -35,12 +35,21 @@ class SalesModel:
         noise_scale = numpyro.sample("noise_scale", dist.HalfCauchy(1))
 
         if self.seasonality > 1:
-            seasonal = numpyro.deterministic(MODEL_SEASONAL,
-                jnp.tile(
-                    numpyro.sample('seasonality_one_cycle', dist.Normal(0, 1).expand([self.seasonality]).to_event(1)), 
-                    self.num_seasons_in_data
-                )[:self.data_len]
-            )
+            if FOURIER_SEASONALITY in X: 
+                _dims = X[FOURIER_SEASONALITY].shape[-1]
+                seasonal = numpyro.deterministic(MODEL_SEASONAL,
+                    (
+                        X[FOURIER_SEASONALITY]\
+                        * numpyro.sample('seasonality_betas', dist.Normal(0, 0.1).expand([_dims]).to_event(1))
+                    ).sum(axis=1, keepdims=True)
+                )
+            else:
+                seasonal = numpyro.deterministic(MODEL_SEASONAL,
+                    jnp.tile(
+                        numpyro.sample('seasonality_one_cycle', dist.Normal(0, 1).expand([self.seasonality]).to_event(1)), 
+                        self.num_seasons_in_data
+                    )[:self.data_len]
+                )
         else:
             seasonal = jnp.zeros((self.data_len, 1))
         
@@ -56,7 +65,7 @@ class SalesModel:
         if MEDIA_COMP in X.keys():
             _dims = X[MEDIA_COMP].shape[-1]
             media_covs.append(
-                X[MEDIA_COMP] * numpyro.sample("comp_media_beta", dist.Normal(0, .05).expand([_dims]).to_event(1)))
+                - X[MEDIA_COMP] * numpyro.sample("comp_media_beta", dist.HalfNormal(.05).expand([_dims]).to_event(1)))
             media_retentions.append(
                 numpyro.sample("comp_media_retention", dist.Beta(3, 1).expand([_dims]).to_event(1))
             )

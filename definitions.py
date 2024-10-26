@@ -5,6 +5,7 @@ PRICE = 'price'
 WSD = 'wsd'
 BRAND = 'brand'
 STRUCT = 'structural'
+FOURIER_SEASONALITY = 'fourier_seasonality'
 
 
 # model sites
