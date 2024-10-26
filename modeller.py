@@ -164,7 +164,6 @@ class Modeller:
         self.PrepareInputs()
         return self 
     
-
     def Fit(self, data: pd.DataFrame, spec: dict, show_progress=True, num_samples=1000):
         self.input_df = data
         self.spec = self.CheckFixSpec(spec)
@@ -179,7 +178,6 @@ class Modeller:
         ).Fit(X=self.X, y=self.y, show_progress=show_progress, num_samples=num_samples)
 
         return self
-
 
     def GetDecomposition(self):
         sample = self.model.SampleModel(self.X)
@@ -205,7 +203,6 @@ class Modeller:
     def GetSamples(self):
         return self.model.mcmc.get_samples()
     
-
     def SitesNames(self):
         return self.model.mcmc.get_samples().keys()
     
@@ -286,7 +283,7 @@ class Modeller:
         if self.decomposition is None:
             self.GetDecomposition()
         self.SetChartsSpec()
-        fig, axs = plt.subplots(3, 1, figsize=(16, 8), height_ratios=[3, 1, 1])
+        fig, axs = plt.subplots(3, 1, figsize=(16, 6), height_ratios=[7, 1, 1])
 
         own_area_chart = pd.DataFrame(self.decomposition[self.base_sites + self.struct_sites].sum(axis=1), columns=['Non-media'])
         if MEDIA_OWN in self.X:
@@ -320,7 +317,7 @@ class Modeller:
     def PlotMediaDecomposition(self):
         if not MEDIA_OWN in self.X:
             return 
-        fig, axs = plt.subplots(3, 1, figsize=(16, 8), height_ratios=[3, 1, 1])
+        fig, axs = plt.subplots(3, 1, figsize=(16, 6), height_ratios=[7, 1, 1])
         
         self.decomposition[MEDIA_OWN].plot.area(ax=axs[0], linewidth=0, stacked=False)
         self.input_df[self.spec['X'][MEDIA_OWN]].plot.area(ax=axs[1], linewidth=0, stacked=False)
@@ -369,8 +366,6 @@ class Modeller:
                 axs[next_tile].legend()
             next_tile = next_tile + 1
         plt.show()
-
-
 
 
 
