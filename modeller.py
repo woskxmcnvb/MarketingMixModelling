@@ -72,7 +72,7 @@ class Modeller:
     seasonality_model in ['discrete', 'fourier']
     seasonality_num_fouries_terms: int=None   // если не специфицировано будет seasonality_period / 4
     """
-    seasonality = 1
+    seasonality_period = 1
     seasonality_model: str
     seasonality_num_fouries_terms: int = None
     model_name: str
@@ -92,14 +92,22 @@ class Modeller:
 
 
     def __init__(self, 
-                 model_name, 
+                 model_name,
+                 diminishing_return: bool=True,
+                 media_retention_factor: int=3, 
                  seasonality_period: int=1, 
                  seasonality_model='discrete', 
                  seasonality_num_fouries_terms: int=None) -> None:
         assert seasonality_model in ['discrete', 'fourier']
-        self.seasonality = seasonality_period
+
+        self.diminishing_return = diminishing_return
+        self.media_retention_factor = media_retention_factor
+        self.seasonality_period = seasonality_period
         self.seasonality_model = seasonality_model
-        self.seasonality_num_fouries_terms = seasonality_num_fouries_terms
+        if seasonality_num_fouries_terms is not None:
+            self.seasonality_num_fouries_terms = seasonality_num_fouries_terms
+        else:
+            self.seasonality_num_fouries_terms = self.seasonality_period / 4
         self.model_name = model_name
 
     def CheckFixSpec(self, spec):
@@ -107,18 +115,6 @@ class Modeller:
             if isinstance(spec['y'], list):
                 spec['y'] = spec['y'][0]
         return spec
-    
-    @staticmethod
-    def PrepareFouriesSeasonalityX(data_len: int, seasonality: int, num_terms: int) -> np.array:
-        fourier_terms = []
-        fourier_names = []
-        time_axis = np.arange(data_len)
-        for term in range(1, num_terms + 1):
-            fourier_terms.append(np.sin(2 * term * np.pi * time_axis / seasonality))
-            fourier_names.append("sin{}".format(2 * term))
-            fourier_terms.append(np.cos(2 * term * np.pi * time_axis / seasonality))
-            fourier_names.append("cos{}".format(2 * term))
-        return np.column_stack(fourier_terms)
 
     @staticmethod
     def PrepareMediaX(df: pd.DataFrame) -> np.array:
@@ -160,12 +156,6 @@ class Modeller:
         if MEDIA_COMP in self.spec['X']:
             self.X[MEDIA_COMP] = Modeller.PrepareMediaX(self.input_df[self.spec['X'][MEDIA_COMP]])
 
-        if self.seasonality_model == 'fourier' and self.seasonality > 1:
-            if self.seasonality_num_fouries_terms is None:
-                self.seasonality_num_fouries_terms = self.seasonality / 4
-            self.X[FOURIER_SEASONALITY] = Modeller.PrepareFouriesSeasonalityX(
-                data_len=len(self.y), seasonality=self.seasonality, num_terms=self.seasonality_num_fouries_terms)
-
         return True
     
     def PrepNoFit(self, data: pd.DataFrame, spec: dict, show_progress=True):
@@ -181,8 +171,13 @@ class Modeller:
         self.spec = self.CheckFixSpec(spec)
         self.PrepareInputs()
         
-        self.model = SalesModel(seasonality=self.seasonality)\
-            .Fit(X=self.X, y=self.y, show_progress=show_progress, num_samples=num_samples)
+        self.model = SalesModel(
+            diminishing_return=self.diminishing_return,
+            seasonality_period=self.seasonality_period, 
+            seasonality_model=self.seasonality_model,
+            seasonality_num_fouries_terms=self.seasonality_num_fouries_terms,
+            retention_factor=self.media_retention_factor
+        ).Fit(X=self.X, y=self.y, show_progress=show_progress, num_samples=num_samples)
 
         return self
 
@@ -238,7 +233,7 @@ class Modeller:
 
         # все кроме base and media
         self.struct_sites = []
-        if self.seasonality > 1:
+        if self.seasonality_period > 1:
             self.struct_sites.append(MODEL_SEASONAL)
         for s in self.spec['X']:
             if 'media' not in s:

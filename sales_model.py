@@ -10,22 +10,53 @@ from numpyro.contrib.control_flow import scan
 
 from definitions import *
 
-
 numpyro.set_host_device_count(4)
 
+
+def FourierCovs(period: int, num_terms: int) -> np.array:
+    fourier_terms = []
+    #fourier_names = [] #for pandas
+    time_axis = np.arange(period)
+    for term in range(1, num_terms + 1):
+        fourier_terms.append(np.sin(2 * term * np.pi * time_axis / period))
+        #fourier_names.append("sin{}".format(2 * term))
+        fourier_terms.append(np.cos(2 * term * np.pi * time_axis / period))
+        #fourier_names.append("cos{}".format(2 * term))
+    return np.column_stack(fourier_terms)
+
 class SalesModel:
-    data_len: int 
+    data_len: int #!!!!!!!!!!!!! избавиться от этого! 
     mcmc = None 
     sample_model = None
-    seasonality = 1
-    num_seasons_in_data: int
     non_cov_sites: list = [MODEL_Y, MODEL_BASE, MODEL_MEDIA]
     
-    def __init__(self, seasonality: int = 1):
-        # 0 - no seasonality
-        self.seasonality = seasonality
-        if self.seasonality > 1: 
+    # model settings
+    retention_factor: int
+    diminishing_return: bool
+
+    # seasonality
+    seasonality_period: int = 1
+    seasonality_model: str
+    #seasonality_num_fouries_terms: int = None # не храним это 
+    SeasonalityCovs: np.array = None
+    #num_seasons_in_data: int
+
+
+    
+    def __init__(self, 
+                 diminishing_return: bool=True,
+                 seasonality_period: int=1, 
+                 seasonality_model: str='discrete',
+                 seasonality_num_fouries_terms: int=None, 
+                 retention_factor: int=3):
+        self.diminishing_return = diminishing_return
+        self.retention_factor = retention_factor
+        self.seasonality_period = seasonality_period
+        self.seasonality_model = seasonality_model
+        if self.seasonality_period > 1: 
             self.non_cov_sites = self.non_cov_sites + [MODEL_SEASONAL]
+            if self.seasonality_model == 'fourier':
+                self.SeasonalityCovs = FourierCovs(self.seasonality_period, seasonality_num_fouries_terms)
     
     def __Model(self, X: dict, y=None):
         time_axis = jnp.arange(self.data_len) #нумерация данных - нужна для сезонности
@@ -34,22 +65,21 @@ class SalesModel:
         base_drift_scale = numpyro.sample("base_drift_scale", dist.HalfNormal(1))
         noise_scale = numpyro.sample("noise_scale", dist.HalfCauchy(1))
 
-        if self.seasonality > 1:
-            if FOURIER_SEASONALITY in X: 
-                _dims = X[FOURIER_SEASONALITY].shape[-1]
+        if self.seasonality_period > 1:
+            if self.seasonality_model == 'fourier':
+                _dims = self.SeasonalityCovs.shape[-1]
                 seasonal = numpyro.deterministic(MODEL_SEASONAL,
                     (
-                        X[FOURIER_SEASONALITY]\
+                        self.SeasonalityCovs\
                         * numpyro.sample('seasonality_betas', dist.Normal(0, 0.1).expand([_dims]).to_event(1))
                     ).sum(axis=1, keepdims=True)
                 )
-            else:
+            elif self.seasonality_model == 'discrete':
                 seasonal = numpyro.deterministic(MODEL_SEASONAL,
-                    jnp.tile(
-                        numpyro.sample('seasonality_one_cycle', dist.Normal(0, 1).expand([self.seasonality]).to_event(1)), 
-                        self.num_seasons_in_data
-                    )[:self.data_len]
+                    numpyro.sample('seasonality_one_cycle', dist.Normal(0, 1).expand([self.seasonality_period]).to_event(1)), 
                 )
+            else:
+                raise ValueError("some shit with seasonality spec")
         else:
             seasonal = jnp.zeros((self.data_len, 1))
         
@@ -57,8 +87,15 @@ class SalesModel:
         media_retentions = []
         if MEDIA_OWN in X.keys():
             _dims = X[MEDIA_OWN].shape[-1]
+            if self.diminishing_return:
+                alpha = numpyro.sample("alpha", dist.LogNormal(1,1).expand([_dims]).to_event(1))
+                gamma = numpyro.sample("gamma", dist.Beta(1,1).expand([_dims]).to_event(1))
+                x_pow_alpha = jnp.power(X[MEDIA_OWN], alpha)
+                X_media = x_pow_alpha / (x_pow_alpha + jnp.power(gamma, alpha))
+            else: 
+                X_media = X[MEDIA_OWN]
             media_covs.append(
-                X[MEDIA_OWN] * numpyro.sample("media_beta", dist.HalfNormal(.05).expand([_dims]).to_event(1)))
+                X_media * numpyro.sample("media_beta", dist.HalfNormal(.05).expand([_dims]).to_event(1)))
             media_retentions.append(
                 numpyro.sample("media_retention", dist.Beta(3, 1).expand([_dims]).to_event(1))
             )
@@ -108,7 +145,7 @@ class SalesModel:
             media_curr = numpyro.deterministic(MODEL_MEDIA, retention * media_prev + media_curr)
             base_curr = numpyro.sample(MODEL_BASE, dist.Normal(base_prev, base_drift_scale))
             y_curr = numpyro.sample(MODEL_Y, dist.StudentT(2,
-                base_curr + struct_curr + seasonal[time_curr % self.seasonality] + media_curr.sum(), 
+                base_curr + struct_curr + seasonal[time_curr % self.seasonality_period] + media_curr.sum(), 
                 noise_scale), 
                 obs=y_curr)
             
@@ -120,7 +157,7 @@ class SalesModel:
 
     def Fit(self, X: dict, y: np.array, show_progress=True, num_samples=1000):
         self.data_len = len(y)
-        self.num_seasons_in_data = ceil(self.data_len / self.seasonality)
+        self.num_seasons_in_data = ceil(self.data_len / self.seasonality_period)
         self.mcmc = numpyro.infer.MCMC(
             numpyro.infer.NUTS(self.__Model),
             num_warmup=1000,
