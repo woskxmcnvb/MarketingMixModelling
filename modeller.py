@@ -2,16 +2,15 @@ import io
 
 import pandas as pd
 import numpy as np 
-
-from math import ceil
+import numpyro
 
 from smoother import Smoother
 from sales_model import SalesModel
 
 import matplotlib.pyplot as plt
-import seaborn as sns
+#import seaborn as sns
 
-from utils import FixDirPath
+#from utils import FixDirPath
 
 from definitions import *
 
@@ -205,27 +204,57 @@ class Modeller:
     
     def GetSamples(self):
         return self.model.mcmc.get_samples()
+    
+
+    def SitesNames(self):
+        return self.model.mcmc.get_samples().keys()
+    
+    
 
 
 
 
 
+    def PlotSiteIntervals(self, site: str, interval: float=0.5, center: str='median', names: list=None, title: str=None, ax=None):
+        """
+        center in ['mean', 'median', 'mid_hpdi']
+        """
+        sample = self.GetSamples()[site]
+        hpdi_ = numpyro.diagnostics.hpdi(sample, interval)
+        if center == 'mean':
+            center_ = sample.mean(0)
+        elif center == 'median':
+            center_ = np.median(sample, axis=0)
+        elif center == 'mid_hpdi':
+            center_ = hpdi_.mean(0)
+        else:
+            raise ValueError("PlotSiteIntervals: check center spec")
+        hpdi_ = numpyro.diagnostics.hpdi(sample, interval)
+        data_for_plot = pd.DataFrame(np.column_stack([hpdi_[0], center_, hpdi_[1]]))
+        if names: 
+            data_for_plot.index = names
+        IntervalPlot(data_for_plot, ax=ax, title=title)
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
+    def PlotDiminishingReturnCurves(self, hpdi=0.5): 
+        if not self.diminishing_return: 
+            print("Not a diminishing return model")
+            return
+        if MEDIA_OWN not in self.spec['X']: 
+            print("No own media in the model") 
+        sample = self.GetSamples()
+        #alpha = sample['alpha'].mean(0)
+        #gamma = sample['gamma'].mean(0)
+        alpha = np.median(sample['alpha'], axis=0)
+        gamma = np.median(sample['gamma'], axis=0)
+        x = np.linspace(0, 1, 20)
+        x_pow_a = np.power(np.repeat(x[:, np.newaxis], len(alpha), axis=1), alpha)
+        
+        fig, axs = plt.subplots(1, 3, figsize=(15, 5))
+        pd.DataFrame(x_pow_a / (x_pow_a + np.power(gamma, alpha)), index=x, columns=self.spec['X'][MEDIA_OWN]).plot.line(ax=axs[0])
+        self.PlotSiteIntervals('alpha', center='median', ax=axs[1], title='Alpha')
+        self.PlotSiteIntervals('gamma', center='median', ax=axs[2], title='Gamma')
 
     def SetChartsSpec(self):
         # только base level
@@ -340,3 +369,27 @@ class Modeller:
                 axs[next_tile].legend()
             next_tile = next_tile + 1
         plt.show()
+
+
+
+
+
+
+
+
+
+def IntervalPlot(data: pd.DataFrame, ax=None, title=None):
+    """
+    принимает 3 столбца: первый, последний - края, средний - точка
+    строки = категории
+    """
+    if ax is None: 
+        ax = plt
+        if title:
+            plt.title(title)
+    else: 
+        if title:
+            ax.set_title(title)
+    for _, row in data.iterrows():
+        ax.plot((row.iloc[0], row.iloc[-1]), (row.name, row.name))
+        ax.scatter(row.iloc[1], row.name)

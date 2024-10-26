@@ -37,11 +37,7 @@ class SalesModel:
     # seasonality
     seasonality_period: int = 1
     seasonality_model: str
-    #seasonality_num_fouries_terms: int = None # не храним это 
     SeasonalityCovs: np.array = None
-    #num_seasons_in_data: int
-
-
     
     def __init__(self, 
                  diminishing_return: bool=True,
@@ -88,7 +84,7 @@ class SalesModel:
         if MEDIA_OWN in X.keys():
             _dims = X[MEDIA_OWN].shape[-1]
             if self.diminishing_return:
-                alpha = numpyro.sample("alpha", dist.LogNormal(1,1).expand([_dims]).to_event(1))
+                alpha = numpyro.sample("alpha", dist.LogNormal(1, 1).expand([_dims]).to_event(1))
                 gamma = numpyro.sample("gamma", dist.Beta(1,1).expand([_dims]).to_event(1))
                 x_pow_alpha = jnp.power(X[MEDIA_OWN], alpha)
                 X_media = x_pow_alpha / (x_pow_alpha + jnp.power(gamma, alpha))
@@ -196,96 +192,8 @@ class SalesModel:
 
     
     
-    
-    
-    """def GetDecomposition(self, X): 
-        # return shape = (sample * time * [base, ads, y])
-        if not self.sample_model: 
-            self._SampleModel(X)
-        decompositions = np.concatenate([self.sample_model['b'][..., np.newaxis], self.sample_model['ads']], axis=-1)
-        decompositions = np.diff(AIModel.EffortsCurveBack(decompositions.cumsum(axis=-1)), axis=-1, prepend=0)
-        decompositions = np.concatenate([decompositions, AIModel.EffortsCurveBack(self.sample_model['y'])[..., np.newaxis]], axis=-1)
-        return decompositions"""
-
-        
-
-    
-    """###################################
-    ###################################
-    def _SampleModelNoDimReturn(self, X): 
-        #сэмплирует модель. ключи аутпута: ['y', 'b', 'ads']
-        assert self.mcmc, "Run .Fit first"
-        pred_func = numpyro.infer.Predictive(self.__ModelNoDimReturn, posterior_samples=self.mcmc.get_samples(), return_sites=['y', 'b', 'ads'])
-        self.sample_model_nodimreturn = pred_func(jax.random.PRNGKey(3), X)
-        return self.sample_model_nodimreturn
-    
-    def _SampleDecompositions(self, X): 
-        # return shape = (sample * time * [base, ads, y])
-        if not self.sample_model: 
-            self._SampleModel(X)
-        decompositions = np.concatenate([self.sample_model['b'][..., np.newaxis], self.sample_model['ads']], axis=-1)
-        decompositions = np.diff(AIModel.EffortsCurveBack(decompositions.cumsum(axis=-1)), axis=-1, prepend=0)
-        decompositions = np.concatenate([decompositions, AIModel.EffortsCurveBack(self.sample_model['y'])[..., np.newaxis]], axis=-1)
-        return decompositions
-    
-    def GetPredictions(self, X): 
-        if not self.sample_model: 
-            self._SampleModel(X)
-        return AIModel.EffortsCurveBack(np.quantile(self.sample_model['y'], [0.125, 0.50, 0.875], axis=0))
-    
-
              
-    def MediaEfficiencyWithDecay(self, X, mode='hpdi', prob=0.5): 
-        # mode options ['hpdi', 'quantile']
-        assert mode in ['hpdi', 'quantile']
-        if not self.sample_model: 
-            self._SampleModel(X)
-        sample_of_efficiencies = self.sample_model['ads'].sum(axis=1) / X.sum(axis=0)
-        if mode == 'quantile':
-            return np.quantile(sample_of_efficiencies, [(1-prob)/2, 0.5, (1+prob)/2], axis=0)
-        elif mode == 'hpdi':
-            b, t = numpyro.diagnostics.hpdi(sample_of_efficiencies, prob=prob, axis=0)
-            return np.vstack([b, (b+t)/2, t])
-        
-    ###################################
-    ###################################
-    def MediaEfficiencyWithDecayNoDimReturn(self, X, mode='hpdi', prob=0.5): 
-        # mode options ['hpdi', 'quantile']
-        assert mode in ['hpdi', 'quantile']
-        if not self.sample_model_nodimreturn: 
-            self._SampleModelNoDimReturn(X)
-        sample_of_efficiencies = self.sample_model_nodimreturn['ads'].sum(axis=1) / X.sum(axis=0)
-        if mode == 'quantile':
-            return np.quantile(sample_of_efficiencies, [(1-prob)/2, 0.5, (1+prob)/2], axis=0)
-        elif mode == 'hpdi':
-            b, t = numpyro.diagnostics.hpdi(sample_of_efficiencies, prob=prob, axis=0)
-            return np.vstack([b, (b+t)/2, t])
-
-    
-    def MediaEfficiency(self, X, mode='hpdi', prob=0.5): 
-        # mode options ['hpdi', 'quantile']
-        assert mode in ['hpdi', 'quantile']
-        sample_of_efficiencies = self._SampleDecompositions(X)[..., 1:-1].sum(axis=1) / X.sum(axis=0)
-        if mode == 'quantile':
-            return np.quantile(sample_of_efficiencies, [(1-prob)/2, 0.5, (1+prob)/2], axis=0)
-        elif mode == 'hpdi':
-            b, t = numpyro.diagnostics.hpdi(sample_of_efficiencies, prob=prob, axis=0)
-            return np.vstack([b, (b+t)/2, t])
-
-    def Beta(self, mode='mean_hpdi', prob=0.5):
-        assert self.mcmc, "Run .Fit first"
-        return AggregateSample(self.mcmc.get_samples()['grp_beta'], mode=mode, prob=prob)
-    
-    def Saturation(self, mode='mean_hpdi', prob=0.5):
-        assert self.mcmc, "Run .Fit first"
-        return AggregateSample(self.mcmc.get_samples()['saturation'], mode=mode, prob=prob)
-    
-    def GetCampaignImpact(self, mode='mean_hpdi', prob=0.5):
-        return self.Beta(mode, prob=prob) * self.Saturation(mode, prob=prob)
-    
-    def GetCampaignRetention(self, mode='mean_hpdi', prob=0.5): 
-        assert self.mcmc, "Run .Fit first"
-        return AggregateSample(self.mcmc.get_samples()['retention'], mode=mode, prob=prob)"""
+   
     
 
 """def __Model(self, X: dict, y=None):
