@@ -1,4 +1,5 @@
 # spec X keys
+Y = 'y'
 MEDIA_OWN = 'media_own'
 MEDIA_COMP = 'media_competitors'
 PRICE = 'price'

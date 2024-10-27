@@ -39,7 +39,7 @@ class Scaler:
         self.scaler_from = scaler_from
 
     def Inspect(self):
-        print(self.min_, self.max_, self.scaling, self.centering)
+        print("min: {}, max: {}, scaling: {}, centeing: {}".format(self.min_, self.max_, self.scaling, self.centering))
 
     def Fit(self, data: pd.DataFrame):
         self.fit_shape_ = data.shape
@@ -197,7 +197,7 @@ class Modeller:
                     v.mean(axis=0), 
                     columns=(self.spec['X'][k] if k in self.spec['X'] else None))
         self.decomposition = pd.concat(decomposition, axis=1).set_axis(self.input_df.index, axis=0)
-        #self.decomposition[(SALES, 0)] = self.scalers[SALES].InverseTransform(self.decomposition[(SALES, 0)])
+        self.decomposition = self.scalers['y'].InverseTransform(self.decomposition)
         return self.decomposition
     
     def GetSamples(self):
@@ -266,8 +266,6 @@ class Modeller:
                 self.struct_sites.append(s)
     
 
-
-
     def PlotFit(self):
         if self.decomposition is None:
             self.GetDecomposition()
@@ -275,7 +273,8 @@ class Modeller:
         fig, axs = plt.subplots(1, 1, figsize=(16, 6))
 
         self.decomposition[MODEL_Y].set_axis(['Modelled metric'], axis=1).plot.line(color='red', ax=axs)
-        pd.DataFrame(self.y, index=self.decomposition.index).plot.line(ax=axs, label="Observed metric", color='grey', alpha=0.5)
+        #pd.DataFrame(self.y, index=self.decomposition.index).plot.line(ax=axs, label="Observed metric", color='grey', alpha=0.5)
+        self.input_df[self.spec[Y]].plot.line(ax=axs, label="Observed metric", color='grey', alpha=0.5)
         axs.legend()
 
 
@@ -293,12 +292,15 @@ class Modeller:
 
         if MEDIA_COMP in self.X:
             pd.DataFrame(self.decomposition[MEDIA_COMP].sum(axis=1), columns=['Competitors media'])\
-                .plot.area(ax=axs[0], linewidth=0, 
-                           ylim=(self.decomposition[MEDIA_COMP].min(axis=None), 1))
+                .plot.area(ax=axs[0], linewidth=0, ylim=(-1,1))
             self.input_df[self.spec['X'][MEDIA_COMP]].plot.area(ax=axs[2], linewidth=0, stacked=False)
         
+        axs[0].set_ylim(
+            1.5 * self.decomposition[MEDIA_COMP].min(axis=None), 
+            1.1 * self.input_df[self.spec[Y]].max(axis=None))
+        
 
-    def PlotNonmediaDecomposition(self):
+    def PlotNonmediaDecomposition(self, ylim: tuple=None):
         if self.decomposition is None:
             self.GetDecomposition()
         self.SetChartsSpec()
@@ -307,9 +309,15 @@ class Modeller:
         # all struct + seasonal as lines 
         if self.struct_sites:
             self.decomposition[self.struct_sites].plot.line(ax=axs, label='Base level')
+        
         # base as area 
         self.decomposition[self.base_sites].plot.area(ax=axs, linewidth=0, alpha=0.2)
-        axs.set_ylim(-0.4, 1.2)
+        if ylim is not None:
+            axs.set_ylim(*ylim)
+        else:
+            axs.set_ylim(
+                1.5 * self.decomposition[self.struct_sites].min(axis=None), 
+                1.1 * self.input_df[self.spec[Y]].max(axis=None))
         axs.legend()
 
         
