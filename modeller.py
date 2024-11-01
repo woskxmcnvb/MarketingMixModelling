@@ -8,7 +8,7 @@ from smoother import Smoother
 from sales_model import SalesModel
 
 import matplotlib.pyplot as plt
-#import seaborn as sns
+import seaborn as sns
 
 #from utils import FixDirPath
 
@@ -181,6 +181,7 @@ class Modeller:
 
     def GetDecomposition(self):
         sample = self.model.SampleModel(self.X)
+        sample_len = sample['base'].shape[-1]
         
         decomposition = {}
         for k, v in sample.items():
@@ -192,10 +193,14 @@ class Modeller:
                 if MEDIA_COMP in self.spec['X']:
                     names_ = self.spec['X'][MEDIA_COMP]
                     decomposition[MEDIA_COMP] = all_media.iloc[:, -len(names_):].set_axis(names_, axis=1)
+            elif k == MODEL_SEASONAL:
+                decomposition[k] = pd.DataFrame(
+                    np.tile(v.squeeze(-1).mean(axis=0), int(np.ceil(sample_len / self.seasonality_period)))[:sample_len, np.newaxis], 
+                    columns=[MODEL_SEASONAL])
             else:
                 decomposition[k] = pd.DataFrame(
                     v.mean(axis=0), 
-                    columns=(self.spec['X'][k] if k in self.spec['X'] else None))
+                    columns=(self.spec['X'][k] if k in self.spec['X'] else [k]))
         self.decomposition = pd.concat(decomposition, axis=1).set_axis(self.input_df.index, axis=0)
         self.decomposition = self.scalers['y'].InverseTransform(self.decomposition)
         return self.decomposition
@@ -231,8 +236,6 @@ class Modeller:
         if names: 
             data_for_plot.index = names
         IntervalPlot(data_for_plot, ax=ax, title=title)
-
-
 
     def PlotDiminishingReturnCurves(self, hpdi=0.5): 
         if not self.diminishing_return: 
@@ -303,22 +306,32 @@ class Modeller:
     def PlotNonmediaDecomposition(self, ylim: tuple=None):
         if self.decomposition is None:
             self.GetDecomposition()
-        self.SetChartsSpec()
-        fig, axs = plt.subplots(1, 1, figsize=(16, 6))
+
+        area_positive = self.decomposition[[MODEL_BASE]]
+        area_negative = None
+
+        non_media_sites = [site for site in self.spec['X'] if 'media' not in site]
         
-        # all struct + seasonal as lines 
-        if self.struct_sites:
-            self.decomposition[self.struct_sites].plot.line(ax=axs, label='Base level')
+        if non_media_sites:
+            non_med_decomp = self.decomposition[non_media_sites]
+            area_positive = pd.concat(
+                [area_positive, non_med_decomp.where(non_med_decomp > 0, 0)],
+                axis=1)
+            area_negative = non_med_decomp.where(non_med_decomp < 0, 0)
         
-        # base as area 
-        self.decomposition[self.base_sites].plot.area(ax=axs, linewidth=0, alpha=0.2)
-        if ylim is not None:
-            axs.set_ylim(*ylim)
-        else:
-            axs.set_ylim(
-                1.5 * self.decomposition[self.struct_sites].min(axis=None), 
-                1.1 * self.input_df[self.spec[Y]].max(axis=None))
-        axs.legend()
+        _, axs = plt.subplots(1, 1, figsize=(16, 6))
+        neg_area_colors = sns.color_palette("muted", len(area_negative.columns)) 
+        if ylim is None:
+            ylim = (
+                1.05 * area_negative.sum(axis=1).min(axis=None) if area_negative is not None else 0,
+                1.05 * area_positive.sum(axis=1).max(axis=None)
+            )
+        area_positive.plot.area(ax=axs, linewidth=0, ylim=ylim, color=['lightgrey']+neg_area_colors)
+        h, _ = axs.get_legend_handles_labels()
+        if area_negative is not None:
+            area_negative.plot.area(ax=axs, linewidth=0, ylim=ylim, color=neg_area_colors)
+
+        axs.legend(handles=h)
 
         
         
