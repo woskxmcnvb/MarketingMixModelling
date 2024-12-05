@@ -14,6 +14,23 @@ import seaborn as sns
 
 from definitions import *
 
+def AreaChartWithNegative(df, ax, ylim=None):
+    area_positive = df.where(df > 0, 0)
+    area_negative = df.where(df < 0, 0)
+    
+    if ylim is None:
+        ylim = (
+            1.10 * area_negative.sum(axis=1).min(axis=None) if area_negative is not None else 0,
+            1.05 * area_positive.sum(axis=1).max(axis=None) if area_positive is not None else 0
+        )
+    if area_positive is not None:
+        area_positive.plot.area(ax=ax, linewidth=0, ylim=ylim, color = sns.color_palette("muted"))##, len(area_negative.columns)))
+    h, _ = ax.get_legend_handles_labels()
+    if area_negative is not None:
+        area_negative.plot.area(ax=ax, linewidth=0, ylim=ylim, color = sns.color_palette("muted"))
+
+    ax.legend(handles=h)
+
 
 class Scaler:
     """
@@ -62,6 +79,37 @@ class Scaler:
         #assert data.shape == self.fit_shape_
         return data.add(self.centering_shift).mul(self.max_ - self.min_).add(self.min_)
     
+
+class VariableGroup:
+    spec: dict
+    
+    def __init__(self):
+        pass
+
+    def FromDict(self, spec: dict):
+        self.spec = spec
+        return self 
+    
+    def Name(self):
+        return self.spec["name"]
+    
+    def VarNames(self): 
+        return [v["name"] for v in self.spec["variables"]]
+    
+    def VarColumns(self): 
+        return [v["column"] for v in self.spec["variables"]]
+    
+    def ForceVector(self): 
+        return [int(v["force_positive"]) for v in self.spec["variables"]]
+    
+    def BetaVector(self): 
+        return [v["beta"] for v in self.spec["variables"]]
+    
+    def RetentionVector(self): 
+        return [v["retention"][0] for v in self.spec["variables"]], [v["retention"][1] for v in self.spec["variables"]]
+    
+    def PrepareData(self, df: pd.DataFrame):
+        pass
 
 
 
@@ -120,6 +168,10 @@ class Modeller:
         SMOOTH_WINDOW = 5
         df = df.fillna(0).rolling(window=SMOOTH_WINDOW, min_periods=1, center=False).mean()
         return df.div(df.max(axis=None)).values
+    
+    @staticmethod
+    def PrepareShit(df: pd.DataFrame, max_: float) -> np.array:
+        return df.fillna(0).div(max_).values
 
     def PrepareInputs(self): 
         self.X = dict()
@@ -150,10 +202,19 @@ class Modeller:
             self.X[STRUCT] = Smoother().Impute(self.scalers[STRUCT].Transform(df))
 
         if MEDIA_OWN in self.spec['X']:
-            self.X[MEDIA_OWN] = Modeller.PrepareMediaX(self.input_df[self.spec['X'][MEDIA_OWN]])
+            _media_list = self.spec['X'][MEDIA_OWN]
+            assert isinstance(_media_list, list) and (len(_media_list) > 0), "Wrong spec for {}".format(MEDIA_OWN)
+            self.X[MEDIA_OWN] = Modeller.PrepareMediaX(self.input_df[_media_list])
+
+        if MEDIA_OWN_LOW_RET in self.spec['X']:
+            _media_list = self.spec['X'][MEDIA_OWN_LOW_RET]
+            assert isinstance(_media_list, list) and (len(_media_list) > 0), "Wrong spec for {}".format(MEDIA_OWN_LOW_RET)
+            self.X[MEDIA_OWN_LOW_RET] = Modeller.PrepareShit(self.input_df[_media_list], self.input_df[self.spec['X'][MEDIA_OWN]].max(axis=None))
         
         if MEDIA_COMP in self.spec['X']:
-            self.X[MEDIA_COMP] = Modeller.PrepareMediaX(self.input_df[self.spec['X'][MEDIA_COMP]])
+            _media_list = self.spec['X'][MEDIA_COMP]
+            assert isinstance(_media_list, list) and (len(_media_list) > 0), "Wrong spec for {}".format(MEDIA_COMP)
+            self.X[MEDIA_COMP] = Modeller.PrepareMediaX(self.input_df[_media_list])
 
         return True
     
@@ -186,13 +247,11 @@ class Modeller:
         decomposition = {}
         for k, v in sample.items():
             if k == MODEL_MEDIA:
-                all_media = pd.DataFrame(v.mean(axis=0))
-                if MEDIA_OWN in self.spec['X']:
-                    names_ = self.spec['X'][MEDIA_OWN]
-                    decomposition[MEDIA_OWN] = all_media.iloc[:, :len(names_)].set_axis(names_, axis=1)
-                if MEDIA_COMP in self.spec['X']:
-                    names_ = self.spec['X'][MEDIA_COMP]
-                    decomposition[MEDIA_COMP] = all_media.iloc[:, -len(names_):].set_axis(names_, axis=1)
+                all_media = pd.DataFrame(v.mean(axis=0), 
+                    columns=sum([self.spec['X'][m] for m in [MEDIA_OWN, MEDIA_OWN_LOW_RET, MEDIA_COMP] if m in self.spec['X']], []))
+                for m in [MEDIA_OWN, MEDIA_OWN_LOW_RET, MEDIA_COMP]: 
+                    if m in self.spec['X']:
+                        decomposition[m] = all_media.loc[:, self.spec['X'][m]]
             elif k == MODEL_SEASONAL:
                 decomposition[k] = pd.DataFrame(
                     np.tile(v.squeeze(-1).mean(axis=0), int(np.ceil(sample_len / self.seasonality_period)))[:sample_len, np.newaxis], 
@@ -255,19 +314,24 @@ class Modeller:
         pd.DataFrame(x_pow_a / (x_pow_a + np.power(gamma, alpha)), index=x, columns=self.spec['X'][MEDIA_OWN]).plot.line(ax=axs[0])
         self.PlotSiteIntervals('alpha', center='median', ax=axs[1], title='Alpha')
         self.PlotSiteIntervals('gamma', center='median', ax=axs[2], title='Gamma')
-
-    def SetChartsSpec(self):
-        # только base level
-        self.base_sites = [MODEL_BASE]
-
-        # все кроме base and media
-        self.struct_sites = []
-        if self.seasonality_period > 1:
-            self.struct_sites.append(MODEL_SEASONAL)
+    
+    def __GetNonMediaSites(self, include_seasonality=True):
+        result = [MODEL_BASE]
+        if self.seasonality_period > 1 and include_seasonality:
+            result.append(MODEL_SEASONAL)
         for s in self.spec['X']:
             if 'media' not in s:
-                self.struct_sites.append(s)
+                result.append(s)
+        return result
     
+    def __GetOwnMediaSites(self):
+        return [s for s in [MEDIA_OWN, MEDIA_OWN_LOW_RET] if s in self.spec['X']]
+
+    def __GetCompMediaSites(self):
+        return [s for s in [MEDIA_COMP] if s in self.spec['X']]
+    
+    def __GetMediaSites(self):
+        return [s for s in [MEDIA_OWN, MEDIA_OWN_LOW_RET, MEDIA_COMP] if s in self.spec['X']]
 
     def PlotFit(self):
         if self.decomposition is None:
@@ -281,58 +345,44 @@ class Modeller:
         axs.legend()
 
 
-    def PlotDecomposition(self):
+    def PlotDecomposition(self, ylim: tuple=None):
         if self.decomposition is None:
             self.GetDecomposition()
-        self.SetChartsSpec()
-        fig, axs = plt.subplots(3, 1, figsize=(16, 6), height_ratios=[7, 1, 1])
-
-        own_area_chart = pd.DataFrame(self.decomposition[self.base_sites + self.struct_sites].sum(axis=1), columns=['Non-media'])
-        if MEDIA_OWN in self.X:
-            own_area_chart[MEDIA_OWN] = self.decomposition[MEDIA_OWN].sum(axis=1)
-            self.input_df[self.spec['X'][MEDIA_OWN]].plot.area(ax=axs[1], linewidth=0, stacked=False)
-        own_area_chart.plot.area(ax=axs[0], linewidth=0)
-
-        if MEDIA_COMP in self.X:
-            pd.DataFrame(self.decomposition[MEDIA_COMP].sum(axis=1), columns=['Competitors media'])\
-                .plot.area(ax=axs[0], linewidth=0, ylim=(-1,1))
-            self.input_df[self.spec['X'][MEDIA_COMP]].plot.area(ax=axs[2], linewidth=0, stacked=False)
         
-        axs[0].set_ylim(
-            1.5 * self.decomposition[MEDIA_COMP].min(axis=None), 
-            1.1 * self.input_df[self.spec[Y]].max(axis=None))
+        chart_data = pd.concat([
+            self.decomposition[self.__GetNonMediaSites()].sum(1).rename("Non-media"), 
+            self.decomposition[self.__GetOwnMediaSites()].sum(1).rename("Own media"),
+            self.decomposition[self.__GetCompMediaSites()].sum(1).rename("Competitors media")
+        ], axis=1)
+        
+        media_sites = self.__GetMediaSites()
+        _, axs = plt.subplots(len(media_sites) + 1, 1, figsize=(16, 6), height_ratios=[7] + [1] * len(media_sites))
+        
+        for tile, media in enumerate(media_sites): 
+            self.input_df[self.spec['X'][media]].sum(1).rename(media).plot.area(ax=axs[tile+1], linewidth=0, stacked=False)
+            axs[tile+1].legend()
+        
+        AreaChartWithNegative(chart_data, axs[0], ylim=ylim)
         
 
-    def PlotNonmediaDecomposition(self, ylim: tuple=None):
+    def PlotCompMediaDecomposition(self, ylim: tuple=None):
         if self.decomposition is None:
             self.GetDecomposition()
-
-        area_positive = self.decomposition[[MODEL_BASE]]
-        area_negative = None
-
-        non_media_sites = [site for site in self.spec['X'] if 'media' not in site]
         
-        if non_media_sites:
-            non_med_decomp = self.decomposition[non_media_sites]
-            area_positive = pd.concat(
-                [area_positive, non_med_decomp.where(non_med_decomp > 0, 0)],
-                axis=1)
-            area_negative = non_med_decomp.where(non_med_decomp < 0, 0)
+        _, axs = plt.subplots(2, 1, figsize=(16, 6), height_ratios=[5, 1])
+        self.input_df[self.spec['X'][MEDIA_COMP]].plot.area(ax=axs[1], linewidth=0, stacked=False)
+        AreaChartWithNegative(self.decomposition[MEDIA_COMP], axs[0], ylim=ylim)
         
-        _, axs = plt.subplots(1, 1, figsize=(16, 6))
-        neg_area_colors = sns.color_palette("muted", len(area_negative.columns)) 
-        if ylim is None:
-            ylim = (
-                1.05 * area_negative.sum(axis=1).min(axis=None) if area_negative is not None else 0,
-                1.05 * area_positive.sum(axis=1).max(axis=None)
-            )
-        area_positive.plot.area(ax=axs, linewidth=0, ylim=ylim, color=['lightgrey']+neg_area_colors)
-        h, _ = axs.get_legend_handles_labels()
-        if area_negative is not None:
-            area_negative.plot.area(ax=axs, linewidth=0, ylim=ylim, color=neg_area_colors)
 
-        axs.legend(handles=h)
-
+    def PlotNonMediaDecomposition(self, ylim: tuple=None):
+        if self.decomposition is None:
+            self.GetDecomposition()
+        
+        _, ax = plt.subplots(1, 1, figsize=(16, 6))
+        AreaChartWithNegative(
+            self.decomposition[self.__GetNonMediaSites(include_seasonality=False)],  #.T.groupby(level=0).sum().T, 
+            ax, ylim=ylim
+        )
         
         
     def PlotMediaDecomposition(self):
@@ -345,27 +395,6 @@ class Modeller:
         if MEDIA_COMP in self.X:
             self.input_df[self.spec['X'][MEDIA_COMP]].plot.area(ax=axs[2], linewidth=0, stacked=False)
 
-
-    """def PlotInitialData(self, chart=True): 
-        fig, axs = plt.subplots(len(self.spec), 1, figsize=(15, len(self.spec)*3))
-
-        self.input_df[self.spec[SALES]].plot.line(ax=axs[0], label=SALES)
-
-        i = 1
-        if BRAND in self.spec: 
-            self.input_df[self.spec[BRAND]].plot.line(ax=axs[i], label=BRAND)
-            axs[i].legend()
-            i = i + 1
-        if PRICE in self.spec: 
-            self.input_df[self.spec[PRICE]].plot.line(ax=axs[i], label=PRICE)
-            axs[i].legend()
-            i = i + 1
-        if WSD in self.spec: 
-            self.input_df[self.spec[WSD]].plot.line(ax=axs[i], label=WSD)
-            axs[i].legend()
-            i = i + 1
-        if MEDIA_OWN in self.spec:
-            self.input_df[self.spec[MEDIA_OWN]].plot.area(ax=axs[i], linewidth=0, stacked=False)"""
         
 
     def PlotInputs(self): 
@@ -381,10 +410,11 @@ class Modeller:
         next_tile = 1
         for sec, d in self.X.items():
             if 'media' in sec:
-                pd.DataFrame(d).plot.area(ax=axs[next_tile], linewidth=0, stacked=False)
+                pd.DataFrame(d).plot.area(ax=axs[next_tile], linewidth=0, stacked=False, title=sec)
             else:
                 axs[next_tile].plot(d, label=sec)
                 axs[next_tile].legend()
+                axs[next_tile].set_title(sec)
             next_tile = next_tile + 1
         plt.show()
 

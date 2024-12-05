@@ -58,7 +58,7 @@ class SalesModel:
         time_axis = jnp.arange(self.data_len) #нумерация данных - нужна для сезонности
 
         base_init =   numpyro.sample("base_init", dist.Beta(2, 2))
-        base_drift_scale = numpyro.sample("base_drift_scale", dist.HalfNormal(1))
+        base_drift_scale = numpyro.sample("base_drift_scale", dist.HalfNormal(0.005))
         noise_scale = numpyro.sample("noise_scale", dist.HalfCauchy(1))
 
         if self.seasonality_period > 1:
@@ -85,7 +85,7 @@ class SalesModel:
             _dims = X[MEDIA_OWN].shape[-1]
             if self.diminishing_return:
                 alpha = numpyro.sample("alpha", dist.LogNormal(1, 1).expand([_dims]).to_event(1))
-                gamma = numpyro.sample("gamma", dist.Beta(1,1).expand([_dims]).to_event(1))
+                gamma = numpyro.sample("gamma", dist.Beta(1, 1).expand([_dims]).to_event(1))
                 x_pow_alpha = jnp.power(X[MEDIA_OWN], alpha)
                 X_media = x_pow_alpha / (x_pow_alpha + jnp.power(gamma, alpha))
             else: 
@@ -94,11 +94,27 @@ class SalesModel:
                 X_media * numpyro.sample("media_beta", dist.HalfNormal(.05).expand([_dims]).to_event(1)))
             media_retentions.append(
                 numpyro.sample("media_retention", dist.Beta(3, 1).expand([_dims]).to_event(1))
+                #numpyro.sample("media_retention", dist.Beta(jnp.repeat(3, _dims), 1))
+            )
+        if MEDIA_OWN_LOW_RET in X.keys():
+            _dims = X[MEDIA_OWN_LOW_RET].shape[-1]
+            if self.diminishing_return:
+                alpha_lr = numpyro.sample("alpha_low_ret", dist.LogNormal(1, 1).expand([_dims]).to_event(1))
+                gamma_lr = numpyro.sample("gamma_low_ret", dist.Beta(1, 1).expand([_dims]).to_event(1))
+                x_pow_alpha = jnp.power(X[MEDIA_OWN_LOW_RET], alpha_lr)
+                X_media = x_pow_alpha / (x_pow_alpha + jnp.power(gamma_lr, alpha_lr))
+            else: 
+                X_media = X[MEDIA_OWN_LOW_RET]
+            media_covs.append(
+                X_media * numpyro.sample("media_beta_low_ret", dist.HalfNormal(.05).expand([_dims]).to_event(1)))
+            media_retentions.append(
+                numpyro.sample("media_retention_low_ret", dist.Beta(1, 3).expand([_dims]).to_event(1))
             )
         if MEDIA_COMP in X.keys():
             _dims = X[MEDIA_COMP].shape[-1]
             media_covs.append(
-                - X[MEDIA_COMP] * numpyro.sample("comp_media_beta", dist.HalfNormal(.05).expand([_dims]).to_event(1)))
+                X[MEDIA_COMP] * numpyro.sample("comp_media_beta", dist.Normal(0, .05).expand([_dims]).to_event(1)))
+                #- X[MEDIA_COMP] * numpyro.sample("comp_media_beta", dist.HalfNormal(.05).expand([_dims]).to_event(1)))
             media_retentions.append(
                 numpyro.sample("comp_media_retention", dist.Beta(3, 1).expand([_dims]).to_event(1))
             )
@@ -139,6 +155,7 @@ class SalesModel:
             y_curr, media_curr, struct_curr, time_curr = current
 
             media_curr = numpyro.deterministic(MODEL_MEDIA, retention * media_prev + media_curr)
+            #base_curr = numpyro.deterministic(MODEL_BASE, base_prev)
             base_curr = numpyro.sample(MODEL_BASE, dist.Normal(base_prev, base_drift_scale))
             y_curr = numpyro.sample(MODEL_Y, dist.StudentT(2,
                 base_curr + struct_curr + seasonal[time_curr % self.seasonality_period] + media_curr.sum(), 
