@@ -71,45 +71,142 @@ class Scaler:
                 self.centering_shift = transformed.mean(axis=0)
         return self 
 
-    def Transform(self, data):
+    def Transform(self, data: pd.DataFrame):
         #assert data.shape == self.fit_shape_
         return data.sub(self.min_).div(self.max_ - self.min_).sub(self.centering_shift)
+    
+    def FitTransform(self, data: pd.DataFrame):
+        return self.Fit(data).Transform(data)
     
     def InverseTransform(self, data):
         #assert data.shape == self.fit_shape_
         return data.add(self.centering_shift).mul(self.max_ - self.min_).add(self.min_)
-    
+
+spec_format = [
+    {
+        "name": "Named variable group",  # обязательное поле, str
+        "type": "media",                 # обязательное поле варианты ["media", "media"]
+        "scaling": "total",              # обязательно для "type"=="non-media", варианты ["total", "column"]
+        "saturation": True,              # обязательно для "type"=="media", для "type"=="non-media" не используется, bool 
+        "variables": [
+            {
+                "name": "TV",            # обязательное поле, str
+                "column": "CH TV",       # обязательное поле, str
+                "rolling": 3,            # обязательное поле для "type"=="media", int
+                "retention": (3, 1),     # обязательное поле для "type"=="media", tuple (3, 1)
+                "beta": 1,               # ---
+                "force_positive": True   # --- 
+            },
+        ]
+    }, 
+]
 
 class VariableGroup:
-    spec: dict
+    spec: dict = None
+    name: str = None
+    data: np.array = None
     
     def __init__(self):
         pass
 
+    def CheckSpec(self, spec): 
+        for field in ["name", "type", "variables"]:
+            assert field in spec, "Missing key '{}' in {}".format(field, spec["name"])
+        
+        assert isinstance(spec["name"], str), "Wrong 'name' format in {}".format(spec["name"])
+        
+        assert spec["type"] in ["media", "non-media"], "Wrong 'type' {} in {}".format(spec["type"], spec["name"])
+        
+        if spec["type"] == "non-media":
+            assert "scaling" in spec, "Missing 'scaling' key in {}".format(spec["name"])
+        if "scaling" in spec:
+            assert spec["scaling"] in ["total", "column"], "Wrong 'scaling' {} in {}".format(spec["scaling"], spec["name"])
+
+        if spec["type"] == "media":
+            assert "saturation" in spec, "Missing 'saturation' key in {}".format(spec["name"])
+            assert isinstance(spec["saturation"], bool), "Wrong 'saturation' format in {}".format(spec["name"])
+
+        assert isinstance(spec["variables"], list), "Wrong 'variables' format in {}".format(spec["name"])
+        for var in spec["variables"]:
+            self.CheckVarSpec(var, spec)
+    
+    def CheckVarSpec(self, var, spec):
+        assert isinstance(var, dict), "Variable format is not dict in {}".format(spec["name"])
+        for field in ["name", "column"]:
+            assert field in var, "Missing key '{}' in {}".format(field, spec["name"])
+        
+        assert isinstance(var["name"], str), "Wrong 'name' format in {}".format(spec["name"])
+        assert isinstance(var["column"], str), "Wrong 'column' format in {}".format(spec["name"])
+
+        if spec["type"] == "media":
+            assert "rolling" in var, "Missing 'rolling' key in {}".format(spec["name"])
+            assert isinstance(var["rolling"], int) and var["rolling"] > 0, "Wrong 'rolling' value in {}".format(spec["name"])
+        
+        if spec["type"] == "media":
+            assert "retention" in var, "Missing 'retention' key in {}".format(spec["name"])
+            assert isinstance(var["retention"], tuple) and len(var["retention"]) == 2, "Wrong 'retention' value in {}".format(spec["name"])
+
     def FromDict(self, spec: dict):
+        self.CheckSpec(spec)
         self.spec = spec
         return self 
     
     def Name(self):
-        return self.spec["name"]
+        return self.name
+
+    def Type(self):
+        return self.spec["type"]
     
     def VarNames(self): 
+        assert self.spec is not None, "Initiate first"
         return [v["name"] for v in self.spec["variables"]]
     
-    def VarColumns(self): 
+    def VarColumns(self):
+        assert self.spec is not None, "Initiate first"
         return [v["column"] for v in self.spec["variables"]]
     
-    def ForceVector(self): 
+    def ForceVector(self):
+        assert self.spec is not None, "Initiate first"
         return [int(v["force_positive"]) for v in self.spec["variables"]]
     
-    def BetaVector(self): 
+    def BetaVector(self):
+        assert self.spec is not None, "Initiate first"
         return [v["beta"] for v in self.spec["variables"]]
     
-    def RetentionVector(self): 
+    def RetentionVector(self):
+        assert self.spec is not None, "Initiate first"
         return [v["retention"][0] for v in self.spec["variables"]], [v["retention"][1] for v in self.spec["variables"]]
     
+    def RollingDict(self): 
+        # если четное делает +1 
+        assert self.spec is not None, "Initiate first"
+        def _to_odd(x):
+            return x + 1 if x % 2 == 0 else x
+        return {v["column"]: _to_odd(v["rolling"]) for v in self.spec["variables"]}
+    
     def PrepareData(self, df: pd.DataFrame):
-        pass
+        assert self.spec is not None, "Initiate first"
+        if self.spec["type"] == "media":
+            rolling_dict = self.RollingDict()
+            self.data = df[self.VarColumns()]\
+                    .where(df[self.VarColumns()] > 0)\
+                    .apply(lambda x: x.rolling(window=rolling_dict[x.name], min_periods=1, center=True).mean())\
+                    .where(df[self.VarColumns()] > 0)\
+                    .fillna(0)\
+                    .pipe(lambda x: x.div(x.max(axis=None)))\
+                    .values
+        elif self.spec["type"] == "non-media":
+            self.data = Smoother().Impute(
+                Scaler(
+                    scaling='min_max', 
+                    scaler_from=self.spec["scaling"], 
+                    centering='first').FitTransform(df[self.VarColumns()])
+            )
+        return self
+    
+    def GetData(self):
+        return self.data
+            
 
 
 
@@ -119,11 +216,6 @@ class Modeller:
     seasonality_model in ['discrete', 'fourier']
     seasonality_num_fouries_terms: int=None   // если не специфицировано будет seasonality_period / 4
     """
-    seasonality_period = 1
-    seasonality_model: str
-    seasonality_num_fouries_terms: int = None
-    model_name: str
-    model_type: str
 
     # data
     input_df: pd.DataFrame
@@ -137,11 +229,38 @@ class Modeller:
     base_sites: list
     struct_sites: list
 
+    def __init__(self):
+        self.X = {
+            "media": [],
+            "non-media": []
+        }
+        self.scalers = dict()
 
-    def __init__(self, 
+    def PrepNoFit(self, spec: dict, data: pd.DataFrame, show_progress=True):
+        # to check inputs
+        self.input_df = data
+        self.spec = spec
+        self.__PrepareInputs()
+        return self 
+
+    def __PrepareInputs(self):
+        # prepare y
+        assert isinstance(self.spec["y"], str), "Wrong 'y' format in spec"
+        df = self.input_df[self.spec["y"]]
+        self.scalers['y'] = Scaler(scaling='max_only').Fit(df)
+        self.y = Smoother().Impute(self.scalers['y'].Transform(df))
+
+        # prepare X
+        for var_group in self.spec["X"]:
+            self.X[var_group["type"]].append(
+                VariableGroup().FromDict(var_group).PrepareData(self.input_df)
+            )
+        
+    
+    """def __init__(self, 
                  model_name,
-                 diminishing_return: bool=True,
-                 media_retention_factor: int=3, 
+                 #diminishing_return: bool=True,
+                 #media_retention_factor: int=3, 
                  seasonality_period: int=1, 
                  seasonality_model='discrete', 
                  seasonality_num_fouries_terms: int=None) -> None:
@@ -155,75 +274,9 @@ class Modeller:
             self.seasonality_num_fouries_terms = seasonality_num_fouries_terms
         else:
             self.seasonality_num_fouries_terms = self.seasonality_period / 4
-        self.model_name = model_name
-
-    def CheckFixSpec(self, spec):
-        if 'y' in spec: 
-            if isinstance(spec['y'], list):
-                spec['y'] = spec['y'][0]
-        return spec
-
-    @staticmethod
-    def PrepareMediaX(df: pd.DataFrame) -> np.array:
-        SMOOTH_WINDOW = 5
-        df = df.fillna(0).rolling(window=SMOOTH_WINDOW, min_periods=1, center=False).mean()
-        return df.div(df.max(axis=None)).values
+        self.model_name = model_name"""
     
-    @staticmethod
-    def PrepareShit(df: pd.DataFrame, max_: float) -> np.array:
-        return df.fillna(0).div(max_).values
-
-    def PrepareInputs(self): 
-        self.X = dict()
-        self.scalers = dict()
-
-        df = self.input_df[self.spec['y']]
-        self.scalers['y'] = Scaler(scaling='max_only').Fit(df)
-        self.y = Smoother().Impute(self.scalers['y'].Transform(df))
-
-        if BRAND in self.spec['X']: 
-            df = self.input_df[self.spec['X'][BRAND]]
-            self.scalers[BRAND] = Scaler(scaling='min_max', scaler_from='column', centering='first').Fit(df)
-            self.X[BRAND] = Smoother().Impute(self.scalers[BRAND].Transform(df))
-
-        if PRICE in self.spec['X']: 
-            df = self.input_df[self.spec['X'][PRICE]]
-            self.scalers[PRICE] = Scaler(scaling='min_max', scaler_from='total', centering='first').Fit(df)
-            self.X[PRICE] = Smoother().Impute(self.scalers[PRICE].Transform(df))
-
-        if WSD in self.spec['X']: 
-            df = self.input_df[self.spec['X'][WSD]]
-            self.scalers[WSD] = Scaler(scaling='min_max', scaler_from='column', centering='first').Fit(df)
-            self.X[WSD] = Smoother().Impute(self.scalers[WSD].Transform(df))
-        
-        if STRUCT in self.spec['X']: 
-            df = self.input_df[self.spec['X'][STRUCT]]
-            self.scalers[STRUCT] = Scaler(scaling='min_max', scaler_from='column', centering='first').Fit(df)
-            self.X[STRUCT] = Smoother().Impute(self.scalers[STRUCT].Transform(df))
-
-        if MEDIA_OWN in self.spec['X']:
-            _media_list = self.spec['X'][MEDIA_OWN]
-            assert isinstance(_media_list, list) and (len(_media_list) > 0), "Wrong spec for {}".format(MEDIA_OWN)
-            self.X[MEDIA_OWN] = Modeller.PrepareMediaX(self.input_df[_media_list])
-
-        if MEDIA_OWN_LOW_RET in self.spec['X']:
-            _media_list = self.spec['X'][MEDIA_OWN_LOW_RET]
-            assert isinstance(_media_list, list) and (len(_media_list) > 0), "Wrong spec for {}".format(MEDIA_OWN_LOW_RET)
-            self.X[MEDIA_OWN_LOW_RET] = Modeller.PrepareShit(self.input_df[_media_list], self.input_df[self.spec['X'][MEDIA_OWN]].max(axis=None))
-        
-        if MEDIA_COMP in self.spec['X']:
-            _media_list = self.spec['X'][MEDIA_COMP]
-            assert isinstance(_media_list, list) and (len(_media_list) > 0), "Wrong spec for {}".format(MEDIA_COMP)
-            self.X[MEDIA_COMP] = Modeller.PrepareMediaX(self.input_df[_media_list])
-
-        return True
     
-    def PrepNoFit(self, data: pd.DataFrame, spec: dict, show_progress=True):
-        # to check inputs
-        self.input_df = data
-        self.spec = self.CheckFixSpec(spec)
-        self.PrepareInputs()
-        return self 
     
     def Fit(self, data: pd.DataFrame, spec: dict, show_progress=True, num_samples=1000):
         self.input_df = data
@@ -271,6 +324,82 @@ class Modeller:
         return self.model.mcmc.get_samples().keys()
     
     
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    ########################## *********CHARTS *****************
+
+    def PlotInputs(self): 
+        tiles_num = sum([len(section) for _, section in self.X.items()]) + 1
+        _, axs = plt.subplots(tiles_num, 1, figsize=(16, tiles_num * 2))
+        if tiles_num == 1:
+            axs.plot(self.y, label='Dependent')
+            axs.legend()
+        else:
+            axs[0].plot(self.y, label='Dependent')
+            axs[0].legend()
+
+        next_tile = 1
+        for var in self.X['media']:
+            pd.DataFrame(var.GetData(), columns=var.VarColumns()).plot.area(ax=axs[next_tile], linewidth=0, stacked=False)
+            next_tile = next_tile + 1
+        for var in self.X['non-media']:
+            pd.DataFrame(var.GetData(), columns=var.VarColumns()).plot.line(ax=axs[next_tile])
+            next_tile = next_tile + 1
+        plt.show()
+
+    ########################## *********CHARTS END*****************
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -397,26 +526,7 @@ class Modeller:
 
         
 
-    def PlotInputs(self): 
-        tiles_num = len(self.X) + 1
-        fig, axs = plt.subplots(tiles_num, 1, figsize=(12, tiles_num * 2))
-        if tiles_num == 1:
-            axs.plot(self.y, label='Dependent')
-            axs.legend()
-        else:
-            axs[0].plot(self.y, label='Dependent')
-            axs[0].legend()
 
-        next_tile = 1
-        for sec, d in self.X.items():
-            if 'media' in sec:
-                pd.DataFrame(d).plot.area(ax=axs[next_tile], linewidth=0, stacked=False, title=sec)
-            else:
-                axs[next_tile].plot(d, label=sec)
-                axs[next_tile].legend()
-                axs[next_tile].set_title(sec)
-            next_tile = next_tile + 1
-        plt.show()
 
 
 
