@@ -4,15 +4,15 @@ import pandas as pd
 import numpy as np 
 import numpyro
 
-from smoother import Smoother
-from sales_model import SalesModel
+from .smoother import Smoother
+from .sales_model import SalesModel
 
 import matplotlib.pyplot as plt
 import seaborn as sns
 
 #from utils import FixDirPath
 
-from definitions import *
+from .definitions import *
 
 def AreaChartWithNegative(df, ax, ylim=None):
     area_positive = df.where(df > 0, 0)
@@ -111,18 +111,20 @@ class Modeller:
             return self.decomposition
         
         sample = self.model.SampleModel(self.X)
-        sample_len = sample['base'].shape[-1]
 
         col_names = {
             "y": [("y", "y")],
             "base": [("base", "base")],
-            "media": sum([g.VarNamesAsTuples() for g in self.X["media"]], []), 
-            "non-media": sum([g.VarNamesAsTuples() for g in self.X["non-media"]], [])
         }
+        if self.X["media"]:
+            col_names["media"] = sum([g.VarNamesAsTuples() for g in self.X["media"]], [])
+        if self.X["non-media"]:
+            col_names["non-media"] = sum([g.VarNamesAsTuples() for g in self.X["non-media"]], [])
+
         col_names = {k: pd.MultiIndex.from_tuples(v) for k, v in col_names.items()}
 
         decomposition = pd.concat(
-            [pd.DataFrame(v.mean(axis=0), columns=col_names[k]) for k, v in sample.items()], 
+            [pd.DataFrame(v.mean(axis=0), columns=col_names[k]) for k, v in sample.items() if k in col_names], 
             axis=1
         ).set_axis(self.input_df.index, axis=0)
         self.decomposition = self.scalers['y'].InverseTransform(decomposition)

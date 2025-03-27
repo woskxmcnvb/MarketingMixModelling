@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 
-from smoother import Smoother
+from .smoother import Smoother
 
 # spec X keys
 MEDIA_OWN = 'media_own'
@@ -68,26 +68,6 @@ spec_new = {
 
 
 
-
-spec_format = [
-    {
-        "name": "Named variable group",  # обязательное поле, str
-        "type": "media",                 # обязательное поле варианты ["media", "media"]
-        "scaling": "total",              # обязательно для "type"=="non-media", варианты ["total", "column"]
-        "saturation": True,              # обязательно для "type"=="media", для "type"=="non-media" не используется, bool 
-        "variables": [
-            {
-                "name": "TV",            # обязательное поле, str
-                "column": "CH TV",       # обязательное поле, str
-                "rolling": 3,            # обязательное поле для "type"=="media", int
-                "retention": (3, 1),     # обязательное поле для "type"=="media", tuple (3, 1)
-                "beta": 1,               # ---
-                "force_positive": True   # --- 
-            },
-        ]
-    }, 
-]
-
 class VariableGroup:
     spec: dict = None
     data: np.array = None
@@ -114,9 +94,15 @@ class VariableGroup:
 
         assert isinstance(spec["variables"], list), "Wrong 'variables' format in {}".format(spec["name"])
         for var in spec["variables"]:
-            self.CheckVarSpec(var, spec)
+            self.__CheckSingleVariableSpec(var, spec)
+
+    def __CheckData(self, data: pd.DataFrame) -> bool: 
+        assert self.spec is not None, "Initiate first"
+        for v in self.VarColumns():
+            assert v in data.columns, "Missing column {}".format(v)
+        return True
     
-    def CheckVarSpec(self, var, spec):
+    def __CheckSingleVariableSpec(self, var, spec):
         assert isinstance(var, dict), "Variable format is not dict in {}".format(spec["name"])
         for field in ["name", "column"]:
             assert field in var, "Missing key '{}' in {}".format(field, spec["name"])
@@ -182,6 +168,8 @@ class VariableGroup:
     
     def PrepareData(self, df: pd.DataFrame):
         assert self.spec is not None, "Initiate first"
+        assert self.__CheckData(df)
+
         if self.spec["type"] == "media":
             rolling_dict = self.RollingDict()
             self.data = df[self.VarColumns()]\

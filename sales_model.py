@@ -8,7 +8,7 @@ import numpyro
 import numpyro.distributions as dist
 from numpyro.contrib.control_flow import scan
 
-from definitions import *
+from .definitions import *
 
 numpyro.set_host_device_count(4)
 
