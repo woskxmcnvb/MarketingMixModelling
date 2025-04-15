@@ -67,6 +67,29 @@ spec_new = {
 }
 
 
+# chart spec format 
+decomposition_spec = {
+    "Base level": 'base',
+    'Own media': 'Own media', 
+    'Competitors media': 'Competitors media',
+    'Non-media': [
+            (          'Pricing',            'Price long'),
+            (          'Pricing',           'Price short'),
+            ( 'Other structural',                 'Brand'),
+            ( 'Other structural',                'Demand'),
+            ( 'Other structural',                   'WSD')
+    ]
+}
+
+media_spec = {
+    "Own media": {
+        "Own media": ['CH TV', 'CH OLV', 'CH OOH', 'CH RADIO', 'CH SP&BLOGG', 'CH BANN', 'CH ECOM'],
+    },
+    "Competitors media": {
+         "Competitors media": ['Compets Actimuno', 'Compets other'], 
+    }
+}
+
 
 class VariableGroup:
     spec: dict = None
