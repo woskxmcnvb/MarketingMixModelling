@@ -53,7 +53,7 @@ class Modeller:
         }
         self.scalers = dict()
 
-    def PrepNoFit(self, spec: dict, data: pd.DataFrame, show_progress=True):
+    def PrepNoFit(self, spec: dict, data: pd.DataFrame):
         self.input_df = data
         self.spec = spec
 
@@ -65,9 +65,12 @@ class Modeller:
 
         # prepare X
         for var_group in self.spec["X"]:
-            self.X[var_group["type"]].append(
-                VariableGroup().FromDict(var_group).PrepareData(self.input_df)
-            )
+            if var_group["type"] in self.X.keys():
+                self.X[var_group["type"]].append(
+                    VariableGroup().FromDict(var_group).PrepareData(self.input_df)
+                )
+            else: 
+                print("Wrong X variable type: {}. Skipped".format(var_group["type"]))
 
         # check fix seasonality 
         if "seasonality" in self.spec:
@@ -194,7 +197,7 @@ class Modeller:
         axs.legend()
 
 
-    def PlotDecomposition(self, decomp_spec: list, media_spec: list=None, ylim: tuple=None):
+    def PlotDecomposition(self, decomp_spec: dict, media_spec: dict=None, ylim: tuple=None):
         decomposition = self.GetDecomposition()
         chart_data = pd.concat({k: decomposition[v].sum(1) for k, v in decomp_spec.items()}, axis=1)
 
