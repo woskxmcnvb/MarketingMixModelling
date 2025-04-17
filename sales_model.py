@@ -173,7 +173,7 @@ class SalesModel:
             return (base_curr, media_curr, media_long_curr), y_curr 
 
         _, y = scan(transition, 
-                    (base_init, jnp.zeros(media_impact.shape[-1]), jnp.zeros(media_long_impact.shape[-1])), #jnp.zeros_like(retention)
+                    (base_init, jnp.zeros(media_impact.shape[-1]), jnp.zeros(media_long_impact.shape[-1])),
                     (y, media_impact, media_long_impact, non_media_impact, time_axis))
         return y
 

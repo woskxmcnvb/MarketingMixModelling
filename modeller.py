@@ -88,24 +88,21 @@ class Modeller:
 
         # check fix seasonality 
         if "seasonality" in self.spec:
-            assert "include" in self.spec["seasonality"], "Include must by specified"
-            assert isinstance(self.spec["seasonality"]["include"], bool), "Include must be bool"
-            if self.spec["seasonality"]["include"] == True:
-                assert "cycle" in self.spec["seasonality"], "Seasonality cycle must be specified"
-                period = self.spec["seasonality"]["cycle"]
-                assert period is not None, "Seasonality period must be specified"
-                assert 1 < period and period <= 52, "Wrong seasonality cycle: {}".format(period)
+            assert "cycle" in self.spec["seasonality"], "Seasonality cycle must be specified"
+            period = self.spec["seasonality"]["cycle"]
+            assert period is not None, "Seasonality period must be specified"
+            assert 1 < period and period <= 52, "Wrong seasonality cycle: {}".format(period)
 
-                assert "model" in self.spec["seasonality"], "Seasonality model must be specified"
-                model = self.spec["seasonality"]["model"]
-                assert model is not None, "Seasonality model must be specified"
-                assert model in ['fourier', 'discrete'], "Wrong seasonality model: {}".format(model)
+            assert "model" in self.spec["seasonality"], "Seasonality model must be specified"
+            model = self.spec["seasonality"]["model"]
+            assert model is not None, "Seasonality model must be specified"
+            assert model in ['fourier', 'discrete'], "Wrong seasonality model: {}".format(model)
 
-                self.seasonality = self.spec["seasonality"].copy()
-                
-                if model == 'fourier':
-                    if ("num_fouries_terms" not in self.seasonality) or (self.seasonality["num_fouries_terms"] is None): 
-                        self.seasonality["num_fouries_terms"] = period // 4
+            self.seasonality = self.spec["seasonality"].copy()
+            
+            if model == 'fourier':
+                if ("num_fouries_terms" not in self.seasonality) or (self.seasonality["num_fouries_terms"] is None): 
+                    self.seasonality["num_fouries_terms"] = period // 4
 
         return self
     
