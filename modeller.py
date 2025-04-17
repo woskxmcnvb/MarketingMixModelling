@@ -74,7 +74,7 @@ class Modeller:
         # prepare y
         assert isinstance(self.spec["y"], str), "Wrong 'y' format in spec"
         df = self.input_df[self.spec["y"]]
-        self.scalers['y'] = Scaler(scaling='max_only').Fit(df)
+        self.scalers['y'] = Scaler(scaling='max_only', scaler_from='column').Fit(df)
         self.y = Smoother().Impute(self.scalers['y'].Transform(df))
 
         # prepare X

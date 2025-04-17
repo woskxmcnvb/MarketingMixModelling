@@ -49,7 +49,13 @@ class VariableGroup:
         if spec["type"] == "non-media":
             assert "scaling" in spec, "Missing 'scaling' key in {}".format(spec["name"])
         if "scaling" in spec:
-            assert spec["scaling"] in ["total", "column"], "Wrong 'scaling' {} in {}".format(spec["scaling"], spec["name"])
+            assert spec["scaling"] in ["total", "column", None],\
+                "Wrong 'scaling' {} in {}".format(spec["scaling"], spec["name"])
+            
+        if "scaling max" in spec:
+            assert isinstance(spec["scaling max"], int), "Wrong 'scaling max' value in {}".format(spec["name"])
+        else: 
+            spec["scaling max"] = None
 
         if spec["type"] == "media":
             if "saturation" not in spec:
@@ -175,14 +181,15 @@ class VariableGroup:
                     .apply(lambda x: x.rolling(window=rolling_dict[x.name], min_periods=1, center=True).mean())\
                     .where(df[self.VarColumns()] > 0)\
                     .fillna(0)\
-                    .pipe(lambda x: x.div(x.max(axis=None)))\
+                    .pipe(lambda x: x.div(x.max(axis=None) if self.spec["scaling max"] is None else self.spec["scaling max"]))\
                     .values
         elif self.spec["type"] == "non-media":
             self.data = Smoother().Impute(
                 Scaler(
                     scaling='min_max', 
                     scaler_from=self.spec["scaling"], 
-                    centering='first').FitTransform(df[self.VarColumns()])
+                    centering='first'
+                ).FitTransform(df[self.VarColumns()])
             )
         return self
     
@@ -205,23 +212,31 @@ class Scaler:
     centering: str = None
     scaler_from: str
 
-    def __init__(self, scaling='min_max', scaler_from='column', centering=None):
+    def __init__(self, scaling='min_max', scaler_from=None, centering=None, min_max_limts=None):
         # scaling in 'min_max' / 'max_only'
-        assert scaler_from in ['total', 'column']
+        assert scaler_from in ['total', 'column', None]
         assert scaling in ['min_max', 'max_only']
         assert centering in [None, 'mean', 'first']
+        assert min_max_limts is None or isinstance(min_max_limts, list) or isinstance(min_max_limts, tuple),\
+            "Scaler init: Wrong min_max_limts value"
+        if scaler_from is None:
+            assert min_max_limts is not None, "Either scaler_from ({}) or min_max_limts ({}) must be provided".format(scaler_from, min_max_limts)
+
         self.scaling = scaling
         self.centering = centering
         self.scaler_from = scaler_from
+        if min_max_limts:
+            self.min_, self.max_ = min_max_limts
 
     def Inspect(self):
         print("min: {}, max: {}, scaling: {}, centeing: {}".format(self.min_, self.max_, self.scaling, self.centering))
 
     def Fit(self, data: pd.DataFrame):
         self.fit_shape_ = data.shape
-        axis_ = 0 if self.scaler_from == 'column' else None
-        self.min_ = data.min(axis=axis_) if self.scaling == 'min_max' else 0
-        self.max_ = data.max(axis=axis_)
+        if (self.max_ is None) or (self.min_ is None):
+            axis_ = 0 if self.scaler_from == 'column' else None
+            self.min_ = data.min(axis=axis_) if self.scaling == 'min_max' else 0
+            self.max_ = data.max(axis=axis_)
         if self.centering:
             transformed = self.Transform(data)
             if self.centering == 'first':
