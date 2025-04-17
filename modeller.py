@@ -56,6 +56,20 @@ class Modeller:
     def PrepNoFit(self, spec: dict, data: pd.DataFrame):
         self.input_df = data
         self.spec = spec
+        
+        # check must - keys
+        missing_keys = []
+        for mk in ["name", "fixed base", "long-term retention", "y", "X"]:
+            if mk not in self.spec:
+                missing_keys.append(mk)
+        assert len(missing_keys) == 0, "ERRROR! Check missing keys in spec {}.".format(missing_keys)
+
+        # check fix fixed base option
+        assert "fixed base" in self.spec, "'fixed base' missing"
+        assert isinstance(self.spec["fixed base"], bool), "Wrong 'fixed base' value, bool is expected"
+        assert "fixed base" in self.spec, "'fixed base' missing"
+        assert isinstance(self.spec["long-term retention"], tuple) or isinstance(self.spec["long-term retention"], list) or self.spec["long-term retention"] == 1,\
+            "Wrong 'long-term retention' value, 1 or list or tuple[int, int] is expected"
 
         # prepare y
         assert isinstance(self.spec["y"], str), "Wrong 'y' format in spec"
@@ -105,8 +119,11 @@ class Modeller:
     
     def Fit(self, spec: dict, data: pd.DataFrame, show_progress=True, num_samples=1000):
         self.PrepNoFit(spec, data)
-        self.model = SalesModel(seasonality_spec=self.seasonality)\
-            .Fit(X=self.X, y=self.y, show_progress=show_progress, num_samples=num_samples)
+        self.model = SalesModel(
+            seasonality_spec=self.seasonality, 
+            fixed_base=self.spec["fixed base"], 
+            long_term_retention=self.spec["long-term retention"]
+        ).Fit(X=self.X, y=self.y, show_progress=show_progress, num_samples=num_samples)
         return self
 
     def GetDecomposition(self):
@@ -121,6 +138,7 @@ class Modeller:
         }
         if self.X["media"]:
             col_names["media"] = sum([g.VarNamesAsTuples() for g in self.X["media"]], [])
+            col_names["media long"] = sum([g.VarNamesAsTuples(suffix = " long") for g in self.X["media"]], [])
         if self.X["non-media"]:
             col_names["non-media"] = sum([g.VarNamesAsTuples() for g in self.X["non-media"]], [])
 

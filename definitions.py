@@ -7,66 +7,6 @@ from .smoother import Smoother
 MEDIA_OWN = 'media_own'
 MEDIA_COMP = 'media_competitors'
 
-# spec dict format 
-spec_new = {
-    "media": [
-        {
-            "name": "Own media",
-            "scaling": "total",
-            "saturation": True,
-            "variables": [
-                {"name": "TV", "column": "CH TV", 
-                 "rolling": 3, "retention": (3, 1), "beta": 1, "force_positive": True},
-                {"name": "OLV",   "column": "CH OLV", 
-                 "rolling": 3, "retention": (3, 1), "beta": 1, "force_positive": True},
-                {"name": "OOH", "column": "CH OOH", 
-                 "rolling": 3, "retention": (3, 1), "beta": 1, "force_positive": True},
-                {"name": "Radio",    "column": "CH RADIO", 
-                 "rolling": 3, "retention": (3, 1), "beta": 1, "force_positive": True},
-                {"name": "Projects & bloggers", "column": "CH SP&BLOGG", 
-                 "rolling": 3, "retention": (3, 1), "beta": 1, "force_positive": True},
-                
-                {"name": "Banners", "column": "CH BANN", 
-                 "rolling": 1, "retention": (1, 3), "beta": 1, "force_positive": True},
-                {"name": "E-com", "column": "CH ECOM", 
-                 "rolling": 1, "retention": (1, 3), "beta": 1, "force_positive": True},
-            ]
-        }, 
-        {
-            "name": "Competitors media",
-            "scaling": "total",
-            "saturation": False,
-            "variables": [
-                {"name": "Actimuno ads", "column": "Compets Actimuno", 
-                 "rolling": 3, "retention": (3, 1), "beta": 1, "force_positive": False},
-                {"name": "Other competitors ads", "column": "Compets other", 
-                 "rolling": 3, "retention": (3, 1), "beta": 1, "force_positive": False},
-            ]
-        }
-    ],  
-    "non_media": [
-        {
-            "name": "Pricing",
-            "scaling": "total",
-            "variables": [
-                {"name": "Price long", "column": "LongPriceIndex", "beta": 1, "force_positive": False}, 
-                {"name": "Price short", "column": "ShortPriceIndex", "beta": 1, "force_positive": False},
-            ]
-        },
-        {
-            "name": "Other structural",
-            "scaling": "column",
-            "variables": [
-                {"name": "Brand", "column": "Brand modeled", "beta": 1, "force_positive": True}, 
-                {"name": "Demand", "column": "Demand", "beta": 1, "force_positive": False},
-                {"name": "SVO", "column": "SVO", "beta": 1, "force_positive": False},
-                {"name": "WSD", "column": "WSD", "beta": 1, "force_positive": True},
-            ]
-        },
-    ]
-}
-
-
 # chart spec format 
 decomposition_spec = {
     "Base level": 'base',
@@ -98,7 +38,7 @@ class VariableGroup:
     def __init__(self):
         pass
 
-    def CheckSpec(self, spec): 
+    def CheckFixSpec(self, spec): 
         for field in ["name", "type", "variables"]:
             assert field in spec, "Missing key '{}' in {}".format(field, spec["name"])
         
@@ -112,12 +52,34 @@ class VariableGroup:
             assert spec["scaling"] in ["total", "column"], "Wrong 'scaling' {} in {}".format(spec["scaling"], spec["name"])
 
         if spec["type"] == "media":
-            assert "saturation" in spec, "Missing 'saturation' key in {}".format(spec["name"])
-            assert isinstance(spec["saturation"], bool), "Wrong 'saturation' format in {}".format(spec["name"])
+            if "saturation" not in spec:
+                print("WARNING! 'saturation' key not in spec for {}. Setting to False, not used.".format(spec["name"]))
+                spec["saturation"] = False
+            assert spec["saturation"] in ['global', 'local', False], "Wrong 'saturation' value in {}".format(spec["name"])
+
+            if "global retention" in spec.keys():
+                assert isinstance(spec["global retention"], tuple) or isinstance(spec["global retention"], list) or spec["global retention"] == False,\
+                    "Wrong 'global retention' value in {}. list or Touple or false is expected".format(spec["name"])
+            else: 
+                spec["global retention"] = False
+
+            if "long-term effect" in spec.keys():
+                assert isinstance(spec["long-term effect"], bool), "Wrong 'long-term effect' value in {}".format(spec["name"])
+                if (spec["long-term effect"] == True):
+                    if spec["global retention"] == False:
+                        print("WARNING! Local retentions is not supported together with 'long-term effect'. For {} setting 'global retention' to (3, 1).".format(spec["name"]))
+                        spec["global retention"] = (3, 1)
+                    if spec["saturation"] == 'local':
+                        print("WARNING! Local saturations is not supported together with 'long-term effect'. For {} setting 'saturation' to 'global'.".format(spec["name"]))
+                        spec["saturation"] = 'global'
+            else: 
+                spec["long-term effect"] = False
 
         assert isinstance(spec["variables"], list), "Wrong 'variables' format in {}".format(spec["name"])
-        for var in spec["variables"]:
-            self.__CheckSingleVariableSpec(var, spec)
+        keep_vars = [self.__CheckSingleVariableSpec(var, spec) for var in spec["variables"]]
+        spec["variables"] = [var for keep, var in zip(keep_vars, spec["variables"]) if keep]
+        
+        return spec
 
     def __CheckData(self, data: pd.DataFrame) -> bool: 
         assert self.spec is not None, "Initiate first"
@@ -125,8 +87,12 @@ class VariableGroup:
             assert v in data.columns, "Missing column {}".format(v)
         return True
     
-    def __CheckSingleVariableSpec(self, var, spec):
+    def __CheckSingleVariableSpec(self, var, spec) -> bool:
         assert isinstance(var, dict), "Variable format is not dict in {}".format(spec["name"])
+        
+        if "---" in var: 
+            return False
+
         for field in ["name", "column"]:
             assert field in var, "Missing key '{}' in {}".format(field, spec["name"])
         
@@ -137,34 +103,42 @@ class VariableGroup:
             assert "rolling" in var, "Missing 'rolling' key in {}".format(spec["name"])
             assert isinstance(var["rolling"], int) and var["rolling"] > 0, "Wrong 'rolling' value in {}".format(spec["name"])
         
-        if spec["type"] == "media":
-            assert "retention" in var, "Missing 'retention' key in {}".format(spec["name"])
-            assert isinstance(var["retention"], tuple) and len(var["retention"]) == 2, "Wrong 'retention' value in {}".format(spec["name"])
+            if spec["global retention"] == False:
+                assert "retention" in var, "Missing 'retention' key in {}".format(spec["name"])
+                assert (isinstance(var["retention"], tuple) or isinstance(var["retention"], list)) and len(var["retention"]) == 2,\
+                    "Wrong 'retention' value in {}".format(spec["name"])
+        return True
 
     def FromDict(self, spec: dict):
-        self.CheckSpec(spec)
-        self.spec = spec
+        self.spec = self.CheckFixSpec(spec)
         return self 
     
-    def Name(self):
+    def Name(self) -> str:
         return self.spec["name"]
 
     def Type(self):
         return self.spec["type"]
     
     def Dims(self) -> int: 
+        # int - количество переменных 
         return len(self.spec["variables"])
     
-    def Saturation(self) -> bool: 
+    def Saturation(self) -> str | bool: 
         return self.spec["saturation"]
+    
+    def GlobalRetention(self) -> bool: 
+        return self.spec["global retention"]
+    
+    def HasLongTermEffect(self) -> bool:
+        return self.spec["long-term effect"]
     
     def VarNames(self): 
         assert self.spec is not None, "Initiate first"
         return [v["name"] for v in self.spec["variables"]]
     
-    def VarNamesAsTuples(self): 
+    def VarNamesAsTuples(self, suffix: str = "") -> tuple: 
         assert self.spec is not None, "Initiate first"
-        return [(self.Name(), v["name"]) for v in self.spec["variables"]]
+        return [(self.Name() + suffix, v["name"]) for v in self.spec["variables"]]
     
     def VarColumns(self):
         assert self.spec is not None, "Initiate first"
@@ -180,6 +154,7 @@ class VariableGroup:
     
     def RetentionVector(self):
         assert self.spec is not None, "Initiate first"
+        assert self.spec["global retention"] == False, "Global retention settings"
         return np.array([v["retention"][0] for v in self.spec["variables"]]), np.array([v["retention"][1] for v in self.spec["variables"]])
     
     def RollingDict(self): 
@@ -211,7 +186,7 @@ class VariableGroup:
             )
         return self
     
-    def GetData(self):
+    def GetData(self) -> np.array:
         return self.data
     
 
