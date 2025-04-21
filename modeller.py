@@ -1,7 +1,10 @@
 import io
 
+from copy import deepcopy
+
 import pandas as pd
 import numpy as np 
+import jax.numpy as jnp
 import numpyro
 
 from .smoother import Smoother
@@ -32,87 +35,114 @@ def AreaChartWithNegative(df, ax, ylim=None):
     ax.legend(handles=h)
             
 
+class ModelInputs:
+    media_vars: list[VariableGroup]
+    media_data: jnp.array 
+    
+    non_media_vars: list[VariableGroup]
+    non_media_data: jnp.array
+
+    seasonality: dict = None
+    fixed_base: bool = False
+    long_term_retention: int | tuple = 1
+
+    y: jnp.array
+    scalers: dict[Scaler]
+
+    def __init__(self, spec: dict, df: pd.DataFrame):
+        self.media_vars = []
+        self.non_media_vars = []
+        self.scalers = dict()
+        
+         # check must-keys
+        missing_keys = []
+        for mk in ["name", "fixed base", "long-term retention", "y", "X"]:
+            if mk not in spec:
+                missing_keys.append(mk)
+        assert len(missing_keys) == 0, "ERRROR! Check missing keys in spec {}.".format(missing_keys)
+
+        # check fixed base option
+        assert isinstance(spec["fixed base"], bool), "Wrong 'fixed base' value, bool is expected"
+        self.fixed_base = spec["fixed base"]
+
+        if isinstance(spec["long-term retention"], tuple) or isinstance(spec["long-term retention"], list):
+            self.long_term_retention = list(spec["long-term retention"])
+        elif spec["long-term retention"] == 1:
+            self.long_term_retention = 1 
+        else:
+            raise ValueError("Wrong 'long-term retention' value, 1 or list or tuple[int, int] is expected")
+        
+        # check fix seasonality 
+        if "seasonality" in spec:
+            assert "cycle" in spec["seasonality"], "Seasonality cycle must be specified"
+            period = spec["seasonality"]["cycle"]
+            assert period is not None, "Seasonality period must be specified"
+            assert 1 < period and period <= 52, "Wrong seasonality cycle: {}".format(period)
+
+            assert "model" in spec["seasonality"], "Seasonality model must be specified"
+            model = spec["seasonality"]["model"]
+            assert model is not None, "Seasonality model must be specified"
+            assert model in ['fourier', 'discrete'], "Wrong seasonality model: {}".format(model)
+
+            self.seasonality = spec["seasonality"].copy()
+            
+            if model == 'fourier':
+                if ("num_fouries_terms" not in self.seasonality) or (self.seasonality["num_fouries_terms"] is None): 
+                    self.seasonality["num_fouries_terms"] = period // 4
+
+        # prepare y
+        assert isinstance(spec["y"], str), "Wrong 'y' format in spec"
+        self.scalers['y'] = Scaler(scaling='max_only', scaler_from='column').Fit(df[spec["y"]])
+        self.y = jnp.array(Smoother().Impute(self.scalers['y'].Transform(df[spec["y"]])))
+
+        # prepare X
+        _media_data = []
+        _media_data_index = 0
+        _non_media_data = []
+        _non_media_data_index = 0
+        for var_group in spec["X"]:
+            if var_group["type"] == 'media':
+                self.media_vars.append(VariableGroup(self).FromDict(var_group))
+                dims = self.media_vars[-1].Dims()
+                self.media_vars[-1].SetDataIndex(_media_data_index, _media_data_index + dims)
+                _media_data_index += dims
+                _media_data.append(self.media_vars[-1].PrepareMediaData(df))
+            if var_group["type"] == 'non-media':
+                self.non_media_vars.append(VariableGroup(self).FromDict(var_group))
+                dims = self.non_media_vars[-1].Dims()
+                self.non_media_vars[-1].SetDataIndex(_non_media_data_index, _non_media_data_index + dims)
+                _non_media_data_index += dims
+                _non_media_data.append(self.non_media_vars[-1].PrepareNonMediaData(df))
+            else: 
+                Warning("Wrong X variable type: {}. Skipped".format(var_group["type"]))
+        
+        self.media_data = jnp.column_stack(_media_data)
+        self.non_media_data = jnp.column_stack(_non_media_data)
+    
+    def Copy(self):
+        return deepcopy(self)
+
 
 
 class Modeller:
     # data
+    spec: dict
     input_df: pd.DataFrame
-    seasonality: dict = None
-    X: dict = None
-    y: np.array
-    scalers: dict[Scaler]
+    model_inputs: ModelInputs = None
 
     # result
     model = None
     decomposition: pd.DataFrame = None
 
     def __init__(self):
-        self.X = {
-            "media": [],
-            "non-media": []
-        }
-        self.scalers = dict()
+        pass
 
     def PrepNoFit(self, spec: dict, data: pd.DataFrame):
         self.input_df = data
         self.spec = spec
-        
-        # check must - keys
-        missing_keys = []
-        for mk in ["name", "fixed base", "long-term retention", "y", "X"]:
-            if mk not in self.spec:
-                missing_keys.append(mk)
-        assert len(missing_keys) == 0, "ERRROR! Check missing keys in spec {}.".format(missing_keys)
-
-        # check fix fixed base option
-        assert "fixed base" in self.spec, "'fixed base' missing"
-        assert isinstance(self.spec["fixed base"], bool), "Wrong 'fixed base' value, bool is expected"
-        assert "fixed base" in self.spec, "'fixed base' missing"
-        assert isinstance(self.spec["long-term retention"], tuple) or isinstance(self.spec["long-term retention"], list) or self.spec["long-term retention"] == 1,\
-            "Wrong 'long-term retention' value, 1 or list or tuple[int, int] is expected"
-
-        # prepare y
-        assert isinstance(self.spec["y"], str), "Wrong 'y' format in spec"
-        df = self.input_df[self.spec["y"]]
-        self.scalers['y'] = Scaler(scaling='max_only', scaler_from='column').Fit(df)
-        self.y = Smoother().Impute(self.scalers['y'].Transform(df))
-
-        # prepare X
-        for var_group in self.spec["X"]:
-            if var_group["type"] in self.X.keys():
-                self.X[var_group["type"]].append(
-                    VariableGroup().FromDict(var_group).PrepareData(self.input_df)
-                )
-            else: 
-                print("Wrong X variable type: {}. Skipped".format(var_group["type"]))
-
-        # check fix seasonality 
-        if "seasonality" in self.spec:
-            assert "cycle" in self.spec["seasonality"], "Seasonality cycle must be specified"
-            period = self.spec["seasonality"]["cycle"]
-            assert period is not None, "Seasonality period must be specified"
-            assert 1 < period and period <= 52, "Wrong seasonality cycle: {}".format(period)
-
-            assert "model" in self.spec["seasonality"], "Seasonality model must be specified"
-            model = self.spec["seasonality"]["model"]
-            assert model is not None, "Seasonality model must be specified"
-            assert model in ['fourier', 'discrete'], "Wrong seasonality model: {}".format(model)
-
-            self.seasonality = self.spec["seasonality"].copy()
-            
-            if model == 'fourier':
-                if ("num_fouries_terms" not in self.seasonality) or (self.seasonality["num_fouries_terms"] is None): 
-                    self.seasonality["num_fouries_terms"] = period // 4
-
+        self.model_inputs = ModelInputs(spec=spec, df=data)
         return self
-    
-    """def NamesMediaGroups(self):
-        assert self.spec is not None
-        return [vg.Name() for vg in self.X["media"]]
-
-    def NamesNonMediaGroups(self):
-        assert self.spec is not None
-        return [vg.Name() for vg in self.X["non-media"]]"""
+        
     
     def Fit(self, spec: dict, data: pd.DataFrame, show_progress=True, num_samples=1000):
         self.PrepNoFit(spec, data)
@@ -184,21 +214,25 @@ class Modeller:
     ########################## *********CHARTS *****************
 
     def PlotInputs(self): 
-        tiles_num = sum([len(section) for _, section in self.X.items()]) + 1
+        tiles_num = len(self.model_inputs.media_vars) + len(self.model_inputs.non_media_vars) + 1
         _, axs = plt.subplots(tiles_num, 1, figsize=(16, tiles_num * 2))
         if tiles_num == 1:
-            axs.plot(self.y, label='Dependent')
+            axs.plot(self.model_inputs.y, label='Dependent')
             axs.legend()
         else:
-            axs[0].plot(self.y, label='Dependent')
+            axs[0].plot(self.model_inputs.y, label='Dependent')
             axs[0].legend()
 
         next_tile = 1
-        for var in self.X['media']:
-            pd.DataFrame(var.GetData(), columns=var.VarColumns()).plot.area(ax=axs[next_tile], linewidth=0, stacked=False)
+        for var in self.model_inputs.media_vars:
+            pd.DataFrame(var.GetData(), 
+            #pd.DataFrame(self.model_inputs.media_data[:, var.data_index], 
+                         columns=var.VarColumns()).plot.area(ax=axs[next_tile], linewidth=0, stacked=False)
             next_tile = next_tile + 1
-        for var in self.X['non-media']:
-            pd.DataFrame(var.GetData(), columns=var.VarColumns()).plot.line(ax=axs[next_tile])
+        for var in self.model_inputs.non_media_vars:
+            pd.DataFrame(var.GetData(), 
+            #pd.DataFrame(self.model_inputs.non_media_data[:, var.data_index], 
+                         columns=var.VarColumns()).plot.line(ax=axs[next_tile])
             next_tile = next_tile + 1
         plt.show()
 

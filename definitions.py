@@ -1,5 +1,5 @@
 import pandas as pd
-import numpy as np
+import jax.numpy as jnp
 
 from .smoother import Smoother
 
@@ -31,12 +31,20 @@ media_spec = {
 }
 
 
+
 class VariableGroup:
     spec: dict = None
-    data: np.array = None
+    #data: np.array = None
+    data_index: jnp.array
+    ref_to_inputs = None
     
-    def __init__(self):
-        pass
+    def __init__(self, ref_to_inputs):
+        self.data_index = None
+        self.ref_to_inputs = ref_to_inputs
+
+    
+    def SetDataIndex(self, _from, _to):
+        self.data_index = jnp.arange(_from, _to)
 
     def CheckFixSpec(self, spec): 
         for field in ["name", "type", "variables"]:
@@ -152,16 +160,16 @@ class VariableGroup:
     
     def ForceVector(self):
         assert self.spec is not None, "Initiate first"
-        return np.array([v["force_positive"] for v in self.spec["variables"]])
+        return jnp.array([v["force_positive"] for v in self.spec["variables"]])
     
     def BetaVector(self):
         assert self.spec is not None, "Initiate first"
-        return np.array([v["beta"] for v in self.spec["variables"]])
+        return jnp.array([v["beta"] for v in self.spec["variables"]])
     
     def RetentionVector(self):
         assert self.spec is not None, "Initiate first"
         assert self.spec["global retention"] == False, "Global retention settings"
-        return np.array([v["retention"][0] for v in self.spec["variables"]]), np.array([v["retention"][1] for v in self.spec["variables"]])
+        return jnp.array([v["retention"][0] for v in self.spec["variables"]]), jnp.array([v["retention"][1] for v in self.spec["variables"]])
     
     def RollingDict(self): 
         # если четное делает +1 
@@ -170,31 +178,34 @@ class VariableGroup:
             return x + 1 if x % 2 == 0 else x
         return {v["column"]: _to_odd(v["rolling"]) for v in self.spec["variables"]}
     
-    def PrepareData(self, df: pd.DataFrame):
-        assert self.spec is not None, "Initiate first"
+    def PrepareNonMediaData(self, df: pd.DataFrame):
         assert self.__CheckData(df)
-
-        if self.spec["type"] == "media":
-            rolling_dict = self.RollingDict()
-            self.data = df[self.VarColumns()]\
-                    .where(df[self.VarColumns()] > 0)\
-                    .apply(lambda x: x.rolling(window=rolling_dict[x.name], min_periods=1, center=True).mean())\
-                    .where(df[self.VarColumns()] > 0)\
-                    .fillna(0)\
-                    .pipe(lambda x: x.div(x.max(axis=None) if self.spec["scaling max"] is None else self.spec["scaling max"]))\
-                    .values
-        elif self.spec["type"] == "non-media":
-            self.data = Smoother().Impute(
-                Scaler(
-                    scaling='min_max', 
-                    scaler_from=self.spec["scaling"], 
-                    centering='first'
-                ).FitTransform(df[self.VarColumns()])
-            )
-        return self
+        return Smoother().Impute(
+            Scaler(
+                scaling='min_max', 
+                scaler_from=self.spec["scaling"], 
+                centering='first'
+            ).FitTransform(df[self.VarColumns()])
+        )
     
-    def GetData(self) -> np.array:
-        return self.data
+    def PrepareMediaData(self, df: pd.DataFrame) -> jnp.array:
+        assert self.__CheckData(df)
+        return df[self.VarColumns()]\
+            .where(df[self.VarColumns()] > 0)\
+            .apply(lambda x: x.rolling(window=self.RollingDict()[x.name], min_periods=1, center=True).mean())\
+            .where(df[self.VarColumns()] > 0)\
+            .fillna(0)\
+            .pipe(lambda x: x.div(x.max(axis=None) if self.spec["scaling max"] is None else self.spec["scaling max"]))\
+            .values
+    
+    def GetData(self) -> jnp.array:
+        if self.Type() == 'media':
+            return self.ref_to_inputs.media_data[:, self.data_index]
+        elif self.Type() == 'non-media':
+            return self.ref_to_inputs.non_media_data[:, self.data_index]
+        else: 
+            raise ValueError("VarGroup: GetData")
+
     
 
 
