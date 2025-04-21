@@ -1,7 +1,10 @@
 import pandas as pd
 import jax.numpy as jnp
 
+from copy import deepcopy
+
 from .smoother import Smoother
+from .scaler import Scaler
 
 # spec X keys
 MEDIA_OWN = 'media_own'
@@ -61,7 +64,7 @@ class VariableGroup:
                 "Wrong 'scaling' {} in {}".format(spec["scaling"], spec["name"])
             
         if "scaling max" in spec:
-            assert isinstance(spec["scaling max"], int), "Wrong 'scaling max' value in {}".format(spec["name"])
+            assert isinstance(spec["scaling max"], int) or (spec["scaling max"] is None), "Wrong 'scaling max' value in {}".format(spec["name"])
         else: 
             spec["scaling max"] = None
 
@@ -205,64 +208,106 @@ class VariableGroup:
             return self.ref_to_inputs.non_media_data[:, self.data_index]
         else: 
             raise ValueError("VarGroup: GetData")
+        
+
+class ModelInputs:
+    media_vars: list[VariableGroup]
+    media_data: jnp.array 
+    
+    non_media_vars: list[VariableGroup]
+    non_media_data: jnp.array
+
+    seasonality: dict = None
+    fixed_base: bool = False
+    long_term_retention: int | tuple = 1
+
+    y: jnp.array
+    scalers: dict[Scaler]
+
+    def __init__(self, spec: dict, df: pd.DataFrame):
+        self.media_vars = []
+        self.non_media_vars = []
+        self.scalers = dict()
+        
+         # check must-keys
+        missing_keys = []
+        for mk in ["name", "fixed base", "long-term retention", "y", "X"]:
+            if mk not in spec:
+                missing_keys.append(mk)
+        assert len(missing_keys) == 0, "ERRROR! Check missing keys in spec {}.".format(missing_keys)
+
+        # check fixed base option
+        assert isinstance(spec["fixed base"], bool), "Wrong 'fixed base' value, bool is expected"
+        self.fixed_base = spec["fixed base"]
+
+        if isinstance(spec["long-term retention"], tuple) or isinstance(spec["long-term retention"], list):
+            self.long_term_retention = list(spec["long-term retention"])
+        elif spec["long-term retention"] == 1:
+            self.long_term_retention = 1 
+        else:
+            raise ValueError("Wrong 'long-term retention' value, 1 or list or tuple[int, int] is expected")
+        
+        # check fix seasonality 
+        if "seasonality" in spec:
+            assert "cycle" in spec["seasonality"], "Seasonality cycle must be specified"
+            period = spec["seasonality"]["cycle"]
+            assert period is not None, "Seasonality period must be specified"
+            assert 1 < period and period <= 52, "Wrong seasonality cycle: {}".format(period)
+
+            assert "model" in spec["seasonality"], "Seasonality model must be specified"
+            model = spec["seasonality"]["model"]
+            assert model is not None, "Seasonality model must be specified"
+            assert model in ['fourier', 'discrete'], "Wrong seasonality model: {}".format(model)
+
+            self.seasonality = spec["seasonality"].copy()
+            
+            if model == 'fourier':
+                if ("num_fouries_terms" not in self.seasonality) or (self.seasonality["num_fouries_terms"] is None): 
+                    self.seasonality["num_fouries_terms"] = period // 4
+
+        # prepare y
+        assert isinstance(spec["y"], str), "Wrong 'y' format in spec"
+        self.scalers['y'] = Scaler(scaling='max_only', scaler_from='column').Fit(df[spec["y"]])
+        self.y = jnp.array(Smoother().Impute(self.scalers['y'].Transform(df[spec["y"]])))
+
+        # prepare X
+        _media_data = []
+        _media_data_index = 0
+        _non_media_data = []
+        _non_media_data_index = 0
+        for var_group in spec["X"]:
+            if var_group["type"] == 'media':
+                self.media_vars.append(VariableGroup(self).FromDict(var_group))
+                dims = self.media_vars[-1].Dims()
+                self.media_vars[-1].SetDataIndex(_media_data_index, _media_data_index + dims)
+                _media_data_index += dims
+                _media_data.append(self.media_vars[-1].PrepareMediaData(df))
+            if var_group["type"] == 'non-media':
+                self.non_media_vars.append(VariableGroup(self).FromDict(var_group))
+                dims = self.non_media_vars[-1].Dims()
+                self.non_media_vars[-1].SetDataIndex(_non_media_data_index, _non_media_data_index + dims)
+                _non_media_data_index += dims
+                _non_media_data.append(self.non_media_vars[-1].PrepareNonMediaData(df))
+            else: 
+                Warning("Wrong X variable type: {}. Skipped".format(var_group["type"]))
+        
+        self.media_data = jnp.column_stack(_media_data)
+        self.non_media_data = jnp.column_stack(_non_media_data)
+    
+    def AllMediaVarnames(self, suffix="") -> list:
+        return sum([g.VarNamesAsTuples(suffix) for g in self.media_vars], [])
+    
+    def AllNonMediaVarnames(self, suffix="") -> list:
+        return sum([g.VarNamesAsTuples(suffix) for g in self.non_media_vars], [])
+    
+    def HasMedia(self) -> bool:
+        return len(self.media_vars) > 0
+    
+    def HasNonMedia(self) -> bool:
+        return len(self.non_media_vars) > 0
+
+    def Copy(self):
+        return deepcopy(self)
 
     
 
-
-class Scaler:
-    """
-    scaling in ['min_max', 'max_only']
-    mode in ['total', 'column']
-    centering in [None, 'mean', 'first']
-    """
-    min_ = None
-    max_ = None
-    centering_shift = 0
-    fit_shape_ = None
-    scaling: str
-    centering: str = None
-    scaler_from: str
-
-    def __init__(self, scaling='min_max', scaler_from=None, centering=None, min_max_limts=None):
-        # scaling in 'min_max' / 'max_only'
-        assert scaler_from in ['total', 'column', None]
-        assert scaling in ['min_max', 'max_only']
-        assert centering in [None, 'mean', 'first']
-        assert min_max_limts is None or isinstance(min_max_limts, list) or isinstance(min_max_limts, tuple),\
-            "Scaler init: Wrong min_max_limts value"
-        if scaler_from is None:
-            assert min_max_limts is not None, "Either scaler_from ({}) or min_max_limts ({}) must be provided".format(scaler_from, min_max_limts)
-
-        self.scaling = scaling
-        self.centering = centering
-        self.scaler_from = scaler_from
-        if min_max_limts:
-            self.min_, self.max_ = min_max_limts
-
-    def Inspect(self):
-        print("min: {}, max: {}, scaling: {}, centeing: {}".format(self.min_, self.max_, self.scaling, self.centering))
-
-    def Fit(self, data: pd.DataFrame):
-        self.fit_shape_ = data.shape
-        if (self.max_ is None) or (self.min_ is None):
-            axis_ = 0 if self.scaler_from == 'column' else None
-            self.min_ = data.min(axis=axis_) if self.scaling == 'min_max' else 0
-            self.max_ = data.max(axis=axis_)
-        if self.centering:
-            transformed = self.Transform(data)
-            if self.centering == 'first':
-                self.centering_shift = transformed.iloc[0]
-            elif self.centering == 'mean':
-                self.centering_shift = transformed.mean(axis=0)
-        return self 
-
-    def Transform(self, data: pd.DataFrame):
-        #assert data.shape == self.fit_shape_
-        return data.sub(self.min_).div(self.max_ - self.min_).sub(self.centering_shift)
-    
-    def FitTransform(self, data: pd.DataFrame):
-        return self.Fit(data).Transform(data)
-    
-    def InverseTransform(self, data):
-        #assert data.shape == self.fit_shape_
-        return data.add(self.centering_shift).mul(self.max_ - self.min_).add(self.min_)

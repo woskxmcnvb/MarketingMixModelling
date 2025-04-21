@@ -13,8 +13,6 @@ from .sales_model import SalesModel
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-#from utils import FixDirPath
-
 from .definitions import *
 
 def AreaChartWithNegative(df, ax, ylim=None):
@@ -35,94 +33,6 @@ def AreaChartWithNegative(df, ax, ylim=None):
     ax.legend(handles=h)
             
 
-class ModelInputs:
-    media_vars: list[VariableGroup]
-    media_data: jnp.array 
-    
-    non_media_vars: list[VariableGroup]
-    non_media_data: jnp.array
-
-    seasonality: dict = None
-    fixed_base: bool = False
-    long_term_retention: int | tuple = 1
-
-    y: jnp.array
-    scalers: dict[Scaler]
-
-    def __init__(self, spec: dict, df: pd.DataFrame):
-        self.media_vars = []
-        self.non_media_vars = []
-        self.scalers = dict()
-        
-         # check must-keys
-        missing_keys = []
-        for mk in ["name", "fixed base", "long-term retention", "y", "X"]:
-            if mk not in spec:
-                missing_keys.append(mk)
-        assert len(missing_keys) == 0, "ERRROR! Check missing keys in spec {}.".format(missing_keys)
-
-        # check fixed base option
-        assert isinstance(spec["fixed base"], bool), "Wrong 'fixed base' value, bool is expected"
-        self.fixed_base = spec["fixed base"]
-
-        if isinstance(spec["long-term retention"], tuple) or isinstance(spec["long-term retention"], list):
-            self.long_term_retention = list(spec["long-term retention"])
-        elif spec["long-term retention"] == 1:
-            self.long_term_retention = 1 
-        else:
-            raise ValueError("Wrong 'long-term retention' value, 1 or list or tuple[int, int] is expected")
-        
-        # check fix seasonality 
-        if "seasonality" in spec:
-            assert "cycle" in spec["seasonality"], "Seasonality cycle must be specified"
-            period = spec["seasonality"]["cycle"]
-            assert period is not None, "Seasonality period must be specified"
-            assert 1 < period and period <= 52, "Wrong seasonality cycle: {}".format(period)
-
-            assert "model" in spec["seasonality"], "Seasonality model must be specified"
-            model = spec["seasonality"]["model"]
-            assert model is not None, "Seasonality model must be specified"
-            assert model in ['fourier', 'discrete'], "Wrong seasonality model: {}".format(model)
-
-            self.seasonality = spec["seasonality"].copy()
-            
-            if model == 'fourier':
-                if ("num_fouries_terms" not in self.seasonality) or (self.seasonality["num_fouries_terms"] is None): 
-                    self.seasonality["num_fouries_terms"] = period // 4
-
-        # prepare y
-        assert isinstance(spec["y"], str), "Wrong 'y' format in spec"
-        self.scalers['y'] = Scaler(scaling='max_only', scaler_from='column').Fit(df[spec["y"]])
-        self.y = jnp.array(Smoother().Impute(self.scalers['y'].Transform(df[spec["y"]])))
-
-        # prepare X
-        _media_data = []
-        _media_data_index = 0
-        _non_media_data = []
-        _non_media_data_index = 0
-        for var_group in spec["X"]:
-            if var_group["type"] == 'media':
-                self.media_vars.append(VariableGroup(self).FromDict(var_group))
-                dims = self.media_vars[-1].Dims()
-                self.media_vars[-1].SetDataIndex(_media_data_index, _media_data_index + dims)
-                _media_data_index += dims
-                _media_data.append(self.media_vars[-1].PrepareMediaData(df))
-            if var_group["type"] == 'non-media':
-                self.non_media_vars.append(VariableGroup(self).FromDict(var_group))
-                dims = self.non_media_vars[-1].Dims()
-                self.non_media_vars[-1].SetDataIndex(_non_media_data_index, _non_media_data_index + dims)
-                _non_media_data_index += dims
-                _non_media_data.append(self.non_media_vars[-1].PrepareNonMediaData(df))
-            else: 
-                Warning("Wrong X variable type: {}. Skipped".format(var_group["type"]))
-        
-        self.media_data = jnp.column_stack(_media_data)
-        self.non_media_data = jnp.column_stack(_non_media_data)
-    
-    def Copy(self):
-        return deepcopy(self)
-
-
 
 class Modeller:
     # data
@@ -139,35 +49,35 @@ class Modeller:
 
     def PrepNoFit(self, spec: dict, data: pd.DataFrame):
         self.input_df = data
-        self.spec = spec
-        self.model_inputs = ModelInputs(spec=spec, df=data)
+        self.spec = spec.copy()
+        self.model_inputs = ModelInputs(spec=self.spec, df=data)
         return self
         
     
     def Fit(self, spec: dict, data: pd.DataFrame, show_progress=True, num_samples=1000):
         self.PrepNoFit(spec, data)
         self.model = SalesModel(
-            seasonality_spec=self.seasonality, 
-            fixed_base=self.spec["fixed base"], 
-            long_term_retention=self.spec["long-term retention"]
-        ).Fit(X=self.X, y=self.y, show_progress=show_progress, num_samples=num_samples)
+            seasonality_spec=self.model_inputs.seasonality, 
+            fixed_base=self.model_inputs.fixed_base, 
+            long_term_retention=self.model_inputs.long_term_retention
+        ).Fit(self.model_inputs, show_progress=show_progress, num_samples=num_samples)
         return self
 
     def GetDecomposition(self):
         if self.decomposition is not None: 
             return self.decomposition
         
-        sample = self.model.SampleModel(self.X)
+        sample = self.model.Predict(self.model_inputs)
 
         col_names = {
             "y": [("y", "y")],
             "base": [("base", "base")],
         }
-        if self.X["media"]:
-            col_names["media"] = sum([g.VarNamesAsTuples() for g in self.X["media"]], [])
-            col_names["media long"] = sum([g.VarNamesAsTuples(suffix = " long") for g in self.X["media"]], [])
-        if self.X["non-media"]:
-            col_names["non-media"] = sum([g.VarNamesAsTuples() for g in self.X["non-media"]], [])
+        if self.model_inputs.HasMedia():
+            col_names["media short"] = [("Media short", v) for _, v in self.model_inputs.AllMediaVarnames()]
+            col_names["media long"] = [("Media long", v) for _, v in self.model_inputs.AllMediaVarnames()]
+        if self.model_inputs.HasNonMedia():
+            col_names["non-media"] = [("Non-media", v) for _, v in self.model_inputs.AllNonMediaVarnames()]
 
         col_names = {k: pd.MultiIndex.from_tuples(v) for k, v in col_names.items()}
 
@@ -175,7 +85,7 @@ class Modeller:
             [pd.DataFrame(v.mean(axis=0), columns=col_names[k]) for k, v in sample.items() if k in col_names], 
             axis=1
         ).set_axis(self.input_df.index, axis=0)
-        self.decomposition = self.scalers['y'].InverseTransform(decomposition)
+        self.decomposition = self.model_inputs.scalers['y'].InverseTransform(decomposition)
         return self.decomposition
     
     def GetSamples(self):
