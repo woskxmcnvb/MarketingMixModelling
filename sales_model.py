@@ -45,7 +45,7 @@ class SalesModel:
         if self.seasonality and (self.seasonality["model"] == 'fourier'):
             self.SeasonalityCovs = FourierCovs(self.seasonality["cycle"], self.seasonality["num_fouries_terms"])
     
-    def __Model(self, X: dict, y=None):
+    def Model(self, X: dict, y=None):
         time_axis = jnp.arange(self.data_len) #нумерация данных - нужна для сезонности
 
         base_init =   numpyro.sample("base_init", dist.Beta(2, 2))
@@ -180,7 +180,7 @@ class SalesModel:
     def Fit(self, X: dict, y: np.array, show_progress=True, num_samples=1000):
         self.data_len = len(y)
         self.mcmc = numpyro.infer.MCMC(
-            numpyro.infer.NUTS(self.__Model),
+            numpyro.infer.NUTS(self.Model),
             num_warmup=1000,
             num_samples=num_samples,
             num_chains=4,
@@ -194,7 +194,7 @@ class SalesModel:
     def SampleModel(self, X): 
         #сэмплирует модель. ключи аутпута: []
         assert self.mcmc, "Run .Fit first"
-        pred_func = numpyro.infer.Predictive(self.__Model, 
+        pred_func = numpyro.infer.Predictive(self.Model, 
                                              posterior_samples=self.mcmc.get_samples(), 
                                              return_sites=['y', 'base', 'media', 'media long', 'non-media']
                                              )
