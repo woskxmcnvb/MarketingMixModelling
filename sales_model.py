@@ -2,39 +2,41 @@ from math import ceil
 
 import jax
 import jax.numpy as jnp
-import numpy as np
+#import numpy as np
 
 import numpyro
 import numpyro.distributions as dist
 from numpyro.contrib.control_flow import scan
 
-#from .modeller import ModelInputs
-
 from .definitions import *
 
 numpyro.set_host_device_count(4)
 
+@jax.jit
+def _media_preprocess(X: jnp.array, alpha: jnp.array, gamma: jnp.array, beta: jnp.array) -> jnp.array:
+    data_pow_alpha = jnp.power(X, alpha)
+    return beta * (data_pow_alpha / (data_pow_alpha + jnp.power(gamma, alpha)))
 
-def FourierCovs(period: int, num_terms: int) -> np.array:
+
+def FourierCovs(period: int, num_terms: int) -> jnp.array:
     fourier_terms = []
     #fourier_names = [] #for pandas
-    time_axis = np.arange(period)
+    time_axis = jnp.arange(period)
     for term in range(1, num_terms + 1):
-        fourier_terms.append(np.sin(2 * term * np.pi * time_axis / period))
+        fourier_terms.append(jnp.sin(2 * term * jnp.pi * time_axis / period))
         #fourier_names.append("sin{}".format(2 * term))
-        fourier_terms.append(np.cos(2 * term * np.pi * time_axis / period))
+        fourier_terms.append(jnp.cos(2 * term * jnp.pi * time_axis / period))
         #fourier_names.append("cos{}".format(2 * term))
-    return np.column_stack(fourier_terms)
+    return jnp.column_stack(fourier_terms)
 
 class SalesModel:
     # data
-    data_len: int #!!!!!!!!!!!!! избавиться от этого! 
     mcmc = None 
     sample_model = None
 
     # seasonality
     seasonality: dict = None
-    SeasonalityCovs: np.array = None
+    SeasonalityCovs: jnp.array = None
 
     # options
     fixed_base: bool = False
@@ -47,8 +49,8 @@ class SalesModel:
         if self.seasonality and (self.seasonality["model"] == 'fourier'):
             self.SeasonalityCovs = FourierCovs(self.seasonality["cycle"], self.seasonality["num_fouries_terms"])
     
-    def Model(self, inputs: ModelInputs, y=None):
-        time_axis = jnp.arange(self.data_len) #нумерация данных - нужна для сезонности
+    def Model(self, X: ModelCovs, y=None):
+        time_axis = jnp.arange(X.covs_len) #нумерация данных - нужна для сезонности
 
         base_init =   numpyro.sample("base_init", dist.Beta(2, 2))
         
@@ -76,7 +78,7 @@ class SalesModel:
                     numpyro.sample('seasonality_one_cycle', dist.Normal(0, 1).expand([self.seasonality_period]).to_event(1)), 
                 )
         
-        if len(inputs.media_vars) == 0:
+        if len(X.media_vars) == 0:
             media_short_covs = jnp.zeros((self.data_len, 1))
             retention_short = jnp.zeros((1))
             media_long_covs = jnp.zeros((self.data_len, 1))
@@ -86,7 +88,7 @@ class SalesModel:
             beta_short = []
             beta_long = []
             retention_short = []
-            for vg in inputs.media_vars:
+            for vg in X.media_vars:
                 # saturation
                 if vg.Saturation() == 'local':
                     alpha.append(
@@ -142,24 +144,23 @@ class SalesModel:
             beta_long = jnp.concatenate(beta_long)
             retention_short = jnp.concatenate(retention_short)
         
-            data_pow_alpha = jnp.power(inputs.media_data, alpha)
-            media_short_covs = beta_short * (data_pow_alpha / (data_pow_alpha + jnp.power(gamma, alpha)))
-            media_long_covs = beta_long * inputs.media_data
+            media_short_covs = _media_preprocess(X.media_data, alpha, gamma, beta_short)
+            media_long_covs = beta_long * X.media_data
         
 
         # non-media variables
-        if len(inputs.non_media_vars) == 0:
+        if len(X.non_media_vars) == 0:
             non_media_covs = numpyro.deterministic("non-media", jnp.zeros((self.data_len, 1)))
         else: 
             non_media_betas = []
-            for vg in inputs.non_media_vars: 
+            for vg in X.non_media_vars: 
                 raw_betas = numpyro.sample("raw beta {}".format(vg.Name()), dist.Normal(1).expand([vg.Dims()]).to_event(1))
                 non_media_betas.append(
                     numpyro.deterministic("beta {}".format(vg.Name()), 
                                         vg.BetaVector() * jnp.where(vg.ForceVector(), jnp.abs(raw_betas), raw_betas))
                 )
             non_media_covs = numpyro.deterministic("non-media", 
-                jnp.concatenate(non_media_betas) * inputs.non_media_data
+                jnp.concatenate(non_media_betas) * X.non_media_data
             )
         # cливаем все в один СТОЛБЕЦ 
         non_media_impact = non_media_covs.sum(axis=1)
@@ -190,8 +191,7 @@ class SalesModel:
                     (y, media_short_covs, media_long_covs, non_media_impact, time_axis))
         return y
 
-    def Fit(self, model_inputs: ModelInputs, show_progress=True, num_samples=1000):
-        self.data_len = model_inputs.y.shape[0]
+    def Fit(self, X: ModelCovs, y: ModelTarget, show_progress=True, num_samples=1000):
         self.mcmc = numpyro.infer.MCMC(
             numpyro.infer.NUTS(self.Model),
             num_warmup=1000,
@@ -200,15 +200,34 @@ class SalesModel:
             progress_bar=show_progress,
         )
         rng_key = jax.random.PRNGKey(3)
-        self.mcmc.run(rng_key, model_inputs, y=model_inputs.y)
+        self.mcmc.run(rng_key, X, y=y.y)
+        self.__build_pred_functions()
         return self
     
-    
-    def Predict(self, X): 
+    def __build_pred_functions(self): 
         assert self.mcmc, "Run .Fit first"
-        pred_func = numpyro.infer.Predictive(self.Model, 
+        self.pred_func_y = numpyro.infer.Predictive(self.Model, 
+                                             posterior_samples=self.mcmc.get_samples(), 
+                                             return_sites=['y']
+                                             )
+        self.pred_func_decomp = numpyro.infer.Predictive(self.Model, 
                                              posterior_samples=self.mcmc.get_samples(), 
                                              return_sites=['y', 'base', 'media short', 'media long', 'non-media']
+                                             )
+
+    
+    def PredictY(self, X):
+        return self.pred_func_y(jax.random.PRNGKey(3), X)
+    
+    def Predict(self, X, return_decomposition=True): 
+        assert self.mcmc, "Run .Fit first"
+        if return_decomposition:
+            return_sites = ['y', 'base', 'media short', 'media long', 'non-media']
+        else:
+            return_sites = ['y']
+        pred_func = numpyro.infer.Predictive(self.Model, 
+                                             posterior_samples=self.mcmc.get_samples(), 
+                                             return_sites=return_sites
                                              )
         self.sample_model = pred_func(jax.random.PRNGKey(3), X)
         return self.sample_model

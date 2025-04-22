@@ -31,6 +31,21 @@ def AreaChartWithNegative(df, ax, ylim=None):
         area_negative.plot.area(ax=ax, linewidth=0, ylim=ylim, color = sns.color_palette("muted"))
 
     ax.legend(handles=h)
+
+def PlotX(X: ModelCovs): 
+        tiles_num = len(X.media_vars) + len(X.non_media_vars)
+        _, axs = plt.subplots(tiles_num, 1, figsize=(16, tiles_num * 2))
+
+        next_tile = 0
+        for var in X.media_vars:
+            pd.DataFrame(X.media_data[:, var.data_index], 
+                         columns=var.VarColumns()).plot.area(ax=axs[next_tile], linewidth=0, stacked=False)
+            next_tile = next_tile + 1
+        for var in X.non_media_vars:
+            pd.DataFrame(X.non_media_data[:, var.data_index], 
+                         columns=var.VarColumns()).plot.line(ax=axs[next_tile])
+            next_tile = next_tile + 1
+        plt.show()
             
 
 
@@ -38,7 +53,8 @@ class Modeller:
     # data
     spec: dict
     input_df: pd.DataFrame
-    model_inputs: ModelInputs = None
+    X: ModelCovs = None
+    y: ModelTarget = None
 
     # result
     model = None
@@ -50,34 +66,40 @@ class Modeller:
     def PrepNoFit(self, spec: dict, data: pd.DataFrame):
         self.input_df = data
         self.spec = spec.copy()
-        self.model_inputs = ModelInputs(spec=self.spec, df=data)
+        self.X = ModelCovs(spec=self.spec).FitToData(data)
+        self.y = ModelTarget().Fit(self.spec, data)
         return self
-        
+    
+    def PrepareNewCovs(self, df: pd.DataFrame) -> ModelCovs:
+        return self.X.Copy().TransformData(df)
     
     def Fit(self, spec: dict, data: pd.DataFrame, show_progress=True, num_samples=1000):
         self.PrepNoFit(spec, data)
         self.model = SalesModel(
-            seasonality_spec=self.model_inputs.seasonality, 
-            fixed_base=self.model_inputs.fixed_base, 
-            long_term_retention=self.model_inputs.long_term_retention
-        ).Fit(self.model_inputs, show_progress=show_progress, num_samples=num_samples)
+            seasonality_spec=self.X.seasonality, 
+            fixed_base=self.X.fixed_base, 
+            long_term_retention=self.X.long_term_retention
+        ).Fit(self.X, self.y, show_progress=show_progress, num_samples=num_samples)
         return self
+    
+    def Predict(self, data: pd.DataFrame) -> dict:
+        return self.model.Predict(self.PrepareNewCovs(data))
 
     def GetDecomposition(self):
         if self.decomposition is not None: 
             return self.decomposition
         
-        sample = self.model.Predict(self.model_inputs)
+        sample = self.model.Predict(self.X)
 
         col_names = {
             "y": [("y", "y")],
             "base": [("base", "base")],
         }
-        if self.model_inputs.HasMedia():
-            col_names["media short"] = [("Media short", v) for _, v in self.model_inputs.AllMediaVarnames()]
-            col_names["media long"] = [("Media long", v) for _, v in self.model_inputs.AllMediaVarnames()]
-        if self.model_inputs.HasNonMedia():
-            col_names["non-media"] = [("Non-media", v) for _, v in self.model_inputs.AllNonMediaVarnames()]
+        if self.X.HasMedia():
+            col_names["media short"] = [("Media short", v) for _, v in self.X.AllMediaVarnames()]
+            col_names["media long"] = [("Media long", v) for _, v in self.X.AllMediaVarnames()]
+        if self.X.HasNonMedia():
+            col_names["non-media"] = [("Non-media", v) for _, v in self.X.AllNonMediaVarnames()]
 
         col_names = {k: pd.MultiIndex.from_tuples(v) for k, v in col_names.items()}
 
@@ -85,7 +107,7 @@ class Modeller:
             [pd.DataFrame(v.mean(axis=0), columns=col_names[k]) for k, v in sample.items() if k in col_names], 
             axis=1
         ).set_axis(self.input_df.index, axis=0)
-        self.decomposition = self.model_inputs.scalers['y'].InverseTransform(decomposition)
+        self.decomposition = self.y.scaler.InverseTransform(decomposition)
         return self.decomposition
     
     def GetSamples(self):
@@ -105,46 +127,30 @@ class Modeller:
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     ########################## *********CHARTS *****************
 
     def PlotInputs(self): 
-        tiles_num = len(self.model_inputs.media_vars) + len(self.model_inputs.non_media_vars) + 1
+        tiles_num = len(self.X.media_vars) + len(self.X.non_media_vars) + 1
         _, axs = plt.subplots(tiles_num, 1, figsize=(16, tiles_num * 2))
         if tiles_num == 1:
-            axs.plot(self.model_inputs.y, label='Dependent')
+            axs.plot(self.y.y, label='Dependent')
             axs.legend()
         else:
-            axs[0].plot(self.model_inputs.y, label='Dependent')
+            axs[0].plot(self.y.y, label='Dependent')
             axs[0].legend()
 
         next_tile = 1
-        for var in self.model_inputs.media_vars:
-            pd.DataFrame(var.GetData(), 
-            #pd.DataFrame(self.model_inputs.media_data[:, var.data_index], 
+        for var in self.X.media_vars:
+            pd.DataFrame(self.X.media_data[:, var.data_index], 
                          columns=var.VarColumns()).plot.area(ax=axs[next_tile], linewidth=0, stacked=False)
             next_tile = next_tile + 1
-        for var in self.model_inputs.non_media_vars:
-            pd.DataFrame(var.GetData(), 
-            #pd.DataFrame(self.model_inputs.non_media_data[:, var.data_index], 
+        for var in self.X.non_media_vars:
+            pd.DataFrame(self.X.non_media_data[:, var.data_index], 
                          columns=var.VarColumns()).plot.line(ax=axs[next_tile])
             next_tile = next_tile + 1
         plt.show()
+
+
 
 
     def PlotFit(self):

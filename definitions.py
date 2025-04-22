@@ -40,6 +40,7 @@ class VariableGroup:
     #data: np.array = None
     data_index: jnp.array
     ref_to_inputs = None
+    scaler: Scaler = None
     
     def __init__(self, ref_to_inputs):
         self.data_index = None
@@ -59,14 +60,18 @@ class VariableGroup:
         
         if spec["type"] == "non-media":
             assert "scaling" in spec, "Missing 'scaling' key in {}".format(spec["name"])
-        if "scaling" in spec:
-            assert spec["scaling"] in ["total", "column", None],\
-                "Wrong 'scaling' {} in {}".format(spec["scaling"], spec["name"])
-            
-        if "scaling max" in spec:
-            assert isinstance(spec["scaling max"], int) or (spec["scaling max"] is None), "Wrong 'scaling max' value in {}".format(spec["name"])
-        else: 
-            spec["scaling max"] = None
+        
+        # scaling
+        assert "scaling" in spec, "'Scaling' must be specified in {}".format(spec["name"])
+        if isinstance(spec["scaling"], int):
+            spec["scaling_min_max"] = [0, spec["scaling"]]
+            spec["scaling_from"] = None
+        elif spec["scaling"] in ["total", "column"]:
+            spec["scaling_min_max"] = None
+            spec["scaling_from"] = spec["scaling"]
+        else:
+            raise ValueError("Wrong 'scaling' {} in {}".format(spec["scaling"], spec["name"]))
+
 
         if spec["type"] == "media":
             if "saturation" not in spec:
@@ -127,7 +132,7 @@ class VariableGroup:
         return True
 
     def FromDict(self, spec: dict):
-        self.spec = self.CheckFixSpec(spec)
+        self.spec = self.CheckFixSpec(spec.copy())
         return self 
     
     def Name(self) -> str:
@@ -181,36 +186,68 @@ class VariableGroup:
             return x + 1 if x % 2 == 0 else x
         return {v["column"]: _to_odd(v["rolling"]) for v in self.spec["variables"]}
     
-    def PrepareNonMediaData(self, df: pd.DataFrame):
+    def FitTransform(self, df: pd.DataFrame, fit_scaler=True) -> jnp.array:
         assert self.__CheckData(df)
+        if self.spec["type"] == 'media':
+            return self._FitTransformMedia(df, fit_scaler)
+        elif self.spec["type"] == 'non-media':
+            return self._FitTransformNonMedia(df, fit_scaler)
+        
+    def Transform(self, df: pd.DataFrame) -> jnp.array:
+        return self.FitTransform(df, fit_scaler=False)
+
+    def _FitTransformNonMedia(self, df: pd.DataFrame, fit_scaler=True) -> jnp.array:
+        if fit_scaler:
+            self.scaler = Scaler(
+                    scaling='min_max', 
+                    scaler_from=self.spec["scaling"], 
+                    centering='first',
+                    min_max_limts=None
+                ).Fit(df[self.VarColumns()])
+        
         return Smoother().Impute(
-            Scaler(
-                scaling='min_max', 
-                scaler_from=self.spec["scaling"], 
-                centering='first'
-            ).FitTransform(df[self.VarColumns()])
-        )
-    
-    def PrepareMediaData(self, df: pd.DataFrame) -> jnp.array:
-        assert self.__CheckData(df)
-        return df[self.VarColumns()]\
+            self.scaler.Transform(df[self.VarColumns()])
+        ) 
+
+
+    def _FitTransformMedia(self, df: pd.DataFrame, fit_scaler=True) -> jnp.array:
+        rolled = df[self.VarColumns()]\
             .where(df[self.VarColumns()] > 0)\
             .apply(lambda x: x.rolling(window=self.RollingDict()[x.name], min_periods=1, center=True).mean())\
             .where(df[self.VarColumns()] > 0)\
-            .fillna(0)\
-            .pipe(lambda x: x.div(x.max(axis=None) if self.spec["scaling max"] is None else self.spec["scaling max"]))\
-            .values
-    
-    def GetData(self) -> jnp.array:
-        if self.Type() == 'media':
-            return self.ref_to_inputs.media_data[:, self.data_index]
-        elif self.Type() == 'non-media':
-            return self.ref_to_inputs.non_media_data[:, self.data_index]
-        else: 
-            raise ValueError("VarGroup: GetData")
+            .fillna(0)
         
+        if fit_scaler:
+            self.scaler = Scaler(
+                    scaling='min_max', 
+                    scaler_from=self.spec["scaling_from"],
+                    centering='first',
+                    min_max_limts=self.spec["scaling_min_max"]
+                ).Fit(rolled)
+        
+        return self.scaler.Transform(rolled).values
+    
 
-class ModelInputs:
+        
+class ModelTarget:
+    y: jnp.array
+    scaler: Scaler
+
+    def __init__(self):
+        pass
+
+    def Fit(self, spec: dict, df: pd.DataFrame):
+        assert 'y' in spec, "ERRROR! 'y' not found in spec"
+        assert isinstance(spec["y"], str), "Wrong 'y' format in spec"
+
+        self.scaler = Scaler(scaling='max_only', scaler_from='column').Fit(df[spec["y"]])
+        self.y = jnp.array(Smoother().Impute(self.scaler.Transform(df[spec["y"]])))
+        return self
+
+
+class ModelCovs:
+    covs_len: int
+    
     media_vars: list[VariableGroup]
     media_data: jnp.array 
     
@@ -221,17 +258,15 @@ class ModelInputs:
     fixed_base: bool = False
     long_term_retention: int | tuple = 1
 
-    y: jnp.array
-    scalers: dict[Scaler]
-
-    def __init__(self, spec: dict, df: pd.DataFrame):
+    def __init__(self, spec: dict):
+        # вынести отсюда работу с данными
+        
         self.media_vars = []
         self.non_media_vars = []
-        self.scalers = dict()
         
-         # check must-keys
+        # check must-keys
         missing_keys = []
-        for mk in ["name", "fixed base", "long-term retention", "y", "X"]:
+        for mk in ["name", "fixed base", "long-term retention", "X"]:
             if mk not in spec:
                 missing_keys.append(mk)
         assert len(missing_keys) == 0, "ERRROR! Check missing keys in spec {}.".format(missing_keys)
@@ -265,15 +300,9 @@ class ModelInputs:
                 if ("num_fouries_terms" not in self.seasonality) or (self.seasonality["num_fouries_terms"] is None): 
                     self.seasonality["num_fouries_terms"] = period // 4
 
-        # prepare y
-        assert isinstance(spec["y"], str), "Wrong 'y' format in spec"
-        self.scalers['y'] = Scaler(scaling='max_only', scaler_from='column').Fit(df[spec["y"]])
-        self.y = jnp.array(Smoother().Impute(self.scalers['y'].Transform(df[spec["y"]])))
 
-        # prepare X
-        _media_data = []
+        # setup X
         _media_data_index = 0
-        _non_media_data = []
         _non_media_data_index = 0
         for var_group in spec["X"]:
             if var_group["type"] == 'media':
@@ -281,18 +310,41 @@ class ModelInputs:
                 dims = self.media_vars[-1].Dims()
                 self.media_vars[-1].SetDataIndex(_media_data_index, _media_data_index + dims)
                 _media_data_index += dims
-                _media_data.append(self.media_vars[-1].PrepareMediaData(df))
             if var_group["type"] == 'non-media':
                 self.non_media_vars.append(VariableGroup(self).FromDict(var_group))
                 dims = self.non_media_vars[-1].Dims()
                 self.non_media_vars[-1].SetDataIndex(_non_media_data_index, _non_media_data_index + dims)
                 _non_media_data_index += dims
-                _non_media_data.append(self.non_media_vars[-1].PrepareNonMediaData(df))
             else: 
                 Warning("Wrong X variable type: {}. Skipped".format(var_group["type"]))
-        
+
+    def FitToData(self, df: pd.DataFrame):
+        self.covs_len = len(df)
+        _media_data = []
+        _non_media_data = []
+
+        for v in self.media_vars:
+            _media_data.append(v.FitTransform(df))
+        for v in self.non_media_vars:
+            _non_media_data.append(v.FitTransform(df))
+
         self.media_data = jnp.column_stack(_media_data)
         self.non_media_data = jnp.column_stack(_non_media_data)
+        return self
+    
+    def TransformData(self, df: pd.DataFrame):
+        self.covs_len = len(df)
+        _media_data = []
+        _non_media_data = []
+
+        for v in self.media_vars:
+            _media_data.append(v.Transform(df))
+        for v in self.non_media_vars:
+            _non_media_data.append(v.Transform(df))
+
+        self.media_data = jnp.column_stack(_media_data)
+        self.non_media_data = jnp.column_stack(_non_media_data)
+        return self
     
     def AllMediaVarnames(self, suffix="") -> list:
         return sum([g.VarNamesAsTuples(suffix) for g in self.media_vars], [])
