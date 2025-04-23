@@ -79,9 +79,9 @@ class SalesModel:
                 )
         
         if len(X.media_vars) == 0:
-            media_short_covs = jnp.zeros((self.data_len, 1))
+            media_short_covs = jnp.zeros((X.covs_len, 1))
             retention_short = jnp.zeros((1))
-            media_long_covs = jnp.zeros((self.data_len, 1))
+            media_long_covs = jnp.zeros((X.covs_len, 1))
         else: 
             alpha = []
             gamma = []

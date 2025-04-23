@@ -3,9 +3,10 @@ import io
 from copy import deepcopy
 
 import pandas as pd
-import numpy as np 
+#import numpy as np 
 import jax.numpy as jnp
 import numpyro
+import arviz as az
 
 from .smoother import Smoother
 from .sales_model import SalesModel
@@ -63,6 +64,9 @@ class Modeller:
     def __init__(self):
         pass
 
+    def Name(self):
+        return self.spec["name"]
+
     def PrepNoFit(self, spec: dict, data: pd.DataFrame):
         self.input_df = data
         self.spec = spec.copy()
@@ -109,6 +113,9 @@ class Modeller:
         ).set_axis(self.input_df.index, axis=0)
         self.decomposition = self.y.scaler.InverseTransform(decomposition)
         return self.decomposition
+    
+    def ToArviZ(self):
+        return az.from_numpyro(self.model.mcmc)
     
     def GetSamples(self):
         return self.model.mcmc.get_samples()
@@ -162,7 +169,7 @@ class Modeller:
         axs.legend()
 
 
-    def PlotDecomposition(self, decomp_spec: dict, media_spec: dict=None, ylim: tuple=None):
+    def PlotDecomposition(self, decomp_spec: dict, media_spec: dict=None, ylim: tuple=None, charts_ratio: tuple=(7,1)):
         decomposition = self.GetDecomposition()
         chart_data = pd.concat({k: decomposition[v].sum(1) for k, v in decomp_spec.items()}, axis=1)
 
@@ -171,7 +178,7 @@ class Modeller:
             AreaChartWithNegative(chart_data, axs, ylim=ylim)
 
         else:
-            _, axs = plt.subplots(len(media_spec)+1, 1, figsize=(16, 6+len(media_spec)), height_ratios=[7]+[1]*len(media_spec))
+            _, axs = plt.subplots(len(media_spec)+1, 1, figsize=(16, 6+len(media_spec)), height_ratios=[charts_ratio[0]]+[charts_ratio[1]]*len(media_spec))
             AreaChartWithNegative(chart_data, axs[0], ylim=ylim)
 
             for tile, (_, columns) in enumerate(media_spec.items()):
@@ -222,13 +229,13 @@ class Modeller:
         if center == 'mean':
             center_ = sample.mean(0)
         elif center == 'median':
-            center_ = np.median(sample, axis=0)
+            center_ = jnp.median(sample, axis=0)
         elif center == 'mid_hpdi':
             center_ = hpdi_.mean(0)
         else:
             raise ValueError("PlotSiteIntervals: check center spec")
         hpdi_ = numpyro.diagnostics.hpdi(sample, interval)
-        data_for_plot = pd.DataFrame(np.column_stack([hpdi_[0], center_, hpdi_[1]]))
+        data_for_plot = pd.DataFrame(jnp.column_stack([hpdi_[0], center_, hpdi_[1]]))
         if names: 
             data_for_plot.index = names
         IntervalPlot(data_for_plot, ax=ax, title=title)
@@ -242,13 +249,13 @@ class Modeller:
         sample = self.GetSamples()
         #alpha = sample['alpha'].mean(0)
         #gamma = sample['gamma'].mean(0)
-        alpha = np.median(sample['alpha'], axis=0)
-        gamma = np.median(sample['gamma'], axis=0)
-        x = np.linspace(0, 1, 20)
-        x_pow_a = np.power(np.repeat(x[:, np.newaxis], len(alpha), axis=1), alpha)
+        alpha = jnp.median(sample['alpha'], axis=0)
+        gamma = jnp.median(sample['gamma'], axis=0)
+        x = jnp.linspace(0, 1, 20)
+        x_pow_a = jnp.power(jnp.repeat(x[:, jnp.newaxis], len(alpha), axis=1), alpha)
         
         fig, axs = plt.subplots(1, 3, figsize=(15, 5))
-        pd.DataFrame(x_pow_a / (x_pow_a + np.power(gamma, alpha)), index=x, columns=self.spec['X'][MEDIA_OWN]).plot.line(ax=axs[0])
+        pd.DataFrame(x_pow_a / (x_pow_a + jnp.power(gamma, alpha)), index=x, columns=self.spec['X'][MEDIA_OWN]).plot.line(ax=axs[0])
         self.PlotSiteIntervals('alpha', center='median', ax=axs[1], title='Alpha')
         self.PlotSiteIntervals('gamma', center='median', ax=axs[2], title='Gamma')
     

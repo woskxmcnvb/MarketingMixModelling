@@ -328,8 +328,8 @@ class ModelCovs:
         for v in self.non_media_vars:
             _non_media_data.append(v.FitTransform(df))
 
-        self.media_data = jnp.column_stack(_media_data)
-        self.non_media_data = jnp.column_stack(_non_media_data)
+        self.media_data = jnp.column_stack(_media_data) if len(_media_data) > 0 else None
+        self.non_media_data = jnp.column_stack(_non_media_data) if len(_non_media_data) > 0 else None
         return self
     
     def TransformData(self, df: pd.DataFrame):
