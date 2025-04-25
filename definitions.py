@@ -112,12 +112,11 @@ class VariableGroup:
     def __CheckSingleVariableSpec(self, var, spec) -> bool:
         assert isinstance(var, dict), "Variable format is not dict in {}".format(spec["name"])
         
-        if "---" in var: 
-            return False
+        if "name" not in var: 
+            print("WARNING! No 'name' key in {}".format(var))
+            return True
 
-        for field in ["name", "column"]:
-            assert field in var, "Missing key '{}' in {}".format(field, spec["name"])
-        
+        assert "column" in var, "Missing 'column' key in {}".format(spec["name"])
         assert isinstance(var["name"], str), "Wrong 'name' format in {}".format(spec["name"])
         assert isinstance(var["column"], str), "Wrong 'column' format in {}".format(spec["name"])
 
@@ -221,7 +220,7 @@ class VariableGroup:
             self.scaler = Scaler(
                     scaling='min_max', 
                     scaler_from=self.spec["scaling_from"],
-                    centering='first',
+                    centering=None,
                     min_max_limts=self.spec["scaling_min_max"]
                 ).Fit(rolled)
         

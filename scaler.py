@@ -32,7 +32,7 @@ class Scaler:
             self.min_, self.max_ = min_max_limts
 
     def Inspect(self):
-        print("min: {}, max: {}, scaling: {}, centeing: {}".format(self.min_, self.max_, self.scaling, self.centering))
+        print("min: {}, max: {}, mode: {}, source: {}, centeing: {}".format(self.min_, self.max_, self.scaling, self.scaler_from, self.centering))
 
     def Fit(self, data: pd.DataFrame):
         self.fit_shape_ = data.shape

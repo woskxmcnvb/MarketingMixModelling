@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 
 def CompareModels(*args):
     models_dict = {m.Name(): m.ToArviZ() for m in args}
-    compare_results = az.compare(models_dict, ic='loo')
+    compare_results = az.compare(models_dict, ic='waic')
     print(compare_results)
     az.plot_compare(compare_results)
     #az.plot_forest(list(models_dict.values()), var_names=['beta'])

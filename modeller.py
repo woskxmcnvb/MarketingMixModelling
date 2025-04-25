@@ -3,7 +3,7 @@ import io
 from copy import deepcopy
 
 import pandas as pd
-#import numpy as np 
+import numpy as np 
 import jax.numpy as jnp
 import numpyro
 import arviz as az
@@ -32,6 +32,26 @@ def AreaChartWithNegative(df, ax, ylim=None):
         area_negative.plot.area(ax=ax, linewidth=0, ylim=ylim, color = sns.color_palette("muted"))
 
     ax.legend(handles=h)
+
+
+
+def IntervalPlot(data: pd.DataFrame, ax=None, title=None):
+    """
+    принимает 3 столбца: первый, последний - края, средний - точка
+    строки = категории
+    """
+    if ax is None: 
+        ax = plt
+        if title:
+            plt.title(title)
+    else: 
+        if title:
+            ax.set_title(title)
+    for _, row in data.iterrows():
+        ax.plot((row.iloc[0], row.iloc[-1]), (row.name, row.name))
+        ax.scatter(row.iloc[1], row.name)
+
+
 
 def PlotX(X: ModelCovs): 
         tiles_num = len(X.media_vars) + len(X.non_media_vars)
@@ -66,6 +86,9 @@ class Modeller:
 
     def Name(self):
         return self.spec["name"]
+    
+    def SetName(self, name: str):
+        self.spec["name"] = name
 
     def PrepNoFit(self, spec: dict, data: pd.DataFrame):
         self.input_df = data
@@ -186,39 +209,21 @@ class Modeller:
                     {name: self.input_df[cols].sum(1) for name, cols in columns.items()}, axis=1
                 ).plot.area(ax=axs[tile+1], linewidth=0, stacked=False)
 
-    ########################## *********CHARTS END*****************
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    def PlotDiminishingReturnCurves(self, hpdi=0.5): 
+        alphas = [s for s in self.SitesNames() if s.startswith("alpha")]
+        gammas = [s for s in self.SitesNames() if s.startswith("gamma")]
+        sample = self.GetSamples()
+        
+        i = 0
+        fig, axs = plt.subplots(1, len(alphas), figsize=(15, 5))
+        for a, g in zip(alphas, gammas):
+            a_med = jnp.median(sample[a], axis=0, keepdims=True)
+            g_med = jnp.median(sample[g], axis=0, keepdims=True)
+            x = jnp.linspace(0, 1, 20)
+            x_pow_a = jnp.power(jnp.repeat(x[:, jnp.newaxis], a_med.shape[-1], axis=1), a_med)
+            pd.DataFrame(x_pow_a / (x_pow_a + jnp.power(g_med, a_med)), index=x).plot.line(ax=axs[i])
+            axs[i].set_title(a)
+            i = i + 1
 
     def PlotSiteIntervals(self, site: str, interval: float=0.5, center: str='median', names: list=None, title: str=None, ax=None):
         """
@@ -240,71 +245,4 @@ class Modeller:
             data_for_plot.index = names
         IntervalPlot(data_for_plot, ax=ax, title=title)
 
-    def PlotDiminishingReturnCurves(self, hpdi=0.5): 
-        if not self.diminishing_return: 
-            print("Not a diminishing return model")
-            return
-        if MEDIA_OWN not in self.spec['X']: 
-            print("No own media in the model") 
-        sample = self.GetSamples()
-        #alpha = sample['alpha'].mean(0)
-        #gamma = sample['gamma'].mean(0)
-        alpha = jnp.median(sample['alpha'], axis=0)
-        gamma = jnp.median(sample['gamma'], axis=0)
-        x = jnp.linspace(0, 1, 20)
-        x_pow_a = jnp.power(jnp.repeat(x[:, jnp.newaxis], len(alpha), axis=1), alpha)
-        
-        fig, axs = plt.subplots(1, 3, figsize=(15, 5))
-        pd.DataFrame(x_pow_a / (x_pow_a + jnp.power(gamma, alpha)), index=x, columns=self.spec['X'][MEDIA_OWN]).plot.line(ax=axs[0])
-        self.PlotSiteIntervals('alpha', center='median', ax=axs[1], title='Alpha')
-        self.PlotSiteIntervals('gamma', center='median', ax=axs[2], title='Gamma')
-    
-
-        
-
-    def PlotNonMediaDecomposition(self, ylim: tuple=None):
-        if self.decomposition is None:
-            self.GetDecomposition()
-        
-        _, ax = plt.subplots(1, 1, figsize=(16, 6))
-        AreaChartWithNegative(
-            self.decomposition[self.__GetNonMediaSites(include_seasonality=False)],  #.T.groupby(level=0).sum().T, 
-            ax, ylim=ylim
-        )
-        
-        
-    def PlotMediaDecomposition(self):
-        if not MEDIA_OWN in self.X:
-            return 
-        fig, axs = plt.subplots(3, 1, figsize=(16, 6), height_ratios=[7, 1, 1])
-        
-        self.decomposition[MEDIA_OWN].plot.area(ax=axs[0], linewidth=0, stacked=False)
-        self.input_df[self.spec['X'][MEDIA_OWN]].plot.area(ax=axs[1], linewidth=0, stacked=False)
-        if MEDIA_COMP in self.X:
-            self.input_df[self.spec['X'][MEDIA_COMP]].plot.area(ax=axs[2], linewidth=0, stacked=False)
-
-        
-
-
-
-
-
-
-
-
-
-def IntervalPlot(data: pd.DataFrame, ax=None, title=None):
-    """
-    принимает 3 столбца: первый, последний - края, средний - точка
-    строки = категории
-    """
-    if ax is None: 
-        ax = plt
-        if title:
-            plt.title(title)
-    else: 
-        if title:
-            ax.set_title(title)
-    for _, row in data.iterrows():
-        ax.plot((row.iloc[0], row.iloc[-1]), (row.name, row.name))
-        ax.scatter(row.iloc[1], row.name)
+    ########################## *********CHARTS END*****************
