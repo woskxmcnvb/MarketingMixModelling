@@ -114,7 +114,7 @@ class VariableGroup:
         
         if "name" not in var: 
             print("WARNING! No 'name' key in {}".format(var))
-            return True
+            return False
 
         assert "column" in var, "Missing 'column' key in {}".format(spec["name"])
         assert isinstance(var["name"], str), "Wrong 'name' format in {}".format(spec["name"])
@@ -177,6 +177,11 @@ class VariableGroup:
         assert self.spec is not None, "Initiate first"
         assert self.spec["global retention"] == False, "Global retention settings"
         return jnp.array([v["retention"][0] for v in self.spec["variables"]]), jnp.array([v["retention"][1] for v in self.spec["variables"]])
+    
+    def ScalerMinMaxCenter(self):
+        assert self.scaler is not None, "Fit first"
+        return (self.scaler.min_.values, self.scaler.max_.values, self.scaler.centering_shift.values)
+
     
     def RollingDict(self): 
         # если четное делает +1 
@@ -359,6 +364,21 @@ class ModelCovs:
 
     def Copy(self):
         return deepcopy(self)
+    
+    def NonMediaMinMaxCenter(self) -> tuple[jnp.array]:
+        """
+        returns non-media scaler params tuple(min, max, centering)
+        """
+        min_ = []
+        max_ = []
+        center_ = []
+        for g in self.non_media_vars: 
+            min__, max__, center__ = g.ScalerMinMaxCenter()
+            min_.append(min__)
+            max_.append(max__)
+            center_.append(center__)
+        return (jnp.concat(min_), jnp.concat(max_), jnp.concat(center_))
+
 
     
 

@@ -55,13 +55,13 @@ class SalesModel:
         base_init =   numpyro.sample("base_init", dist.Beta(2, 2))
         
         if not self.fixed_base:
-            base_drift_scale = numpyro.sample("base_drift_scale", dist.HalfNormal(0.05))
+            base_drift_scale = numpyro.sample("base_drift_scale", dist.HalfNormal(0.01))
         noise_scale = numpyro.sample("noise_scale", dist.HalfCauchy(1))
         
         if self.long_term_retention == 1: 
             retention_long = numpyro.deterministic("retention long", jnp.array(1))
         else: 
-            retention_long = numpyro.sample("retention long", dist.Beta(100, 1))
+            retention_long = numpyro.sample("retention long", dist.Beta(*self.long_term_retention))
         
         # seasonality variables
         if self.seasonality:
@@ -181,6 +181,8 @@ class SalesModel:
             seasonality_curr = seasonal[time_curr % self.seasonality["cycle"]] if self.seasonality else 0
             y_curr = numpyro.sample("y", dist.StudentT(2,
                 base_curr + struct_curr + seasonality_curr + media_curr.sum() + media_long_curr.sum(), 
+                #(1 + seasonality_curr) * (base_curr + struct_curr + media_curr.sum() + media_long_curr.sum()),
+                #base_curr * (seasonality_curr + struct_curr + media_curr.sum() + media_long_curr.sum()),
                 noise_scale), 
                 obs=y_curr)
             
