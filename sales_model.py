@@ -234,17 +234,3 @@ class SalesModel:
         self.sample_model = pred_func(jax.random.PRNGKey(3), X)
         return self.sample_model
     
-
-    """def GetPredictionAndDecomposition(self, X, mode='mean', prob=0.5):
-        # mode options ['mean']
-        assert mode in ['hpdi', 'quantile', 'mean']
-        if not self.sample_model: 
-            self._SampleModel(X)
-        if mode == 'quantile':
-            raise NotImplementedError()
-        if mode == 'hpdi':
-            raise NotImplementedError()
-            decompositions_mid_hpdi = numpyro.diagnostics.hpdi(self._SampleDecompositions(X), prob=prob).mean(axis=0) # shape = (time * [base, ads, y])
-            decompositions_mid_hpdi[..., 0] = decompositions_mid_hpdi[..., -1] - decompositions_mid_hpdi[..., 1:-1].sum(axis=1)
-            return decompositions_mid_hpdi[..., -1],  decompositions_mid_hpdi[..., :-1]
-        #if mode == 'mean':"""

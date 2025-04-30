@@ -67,6 +67,8 @@ def PlotX(X: ModelCovs):
                          columns=var.VarColumns()).plot.line(ax=axs[next_tile])
             next_tile = next_tile + 1
         plt.show()
+
+
             
 
 
@@ -110,7 +112,9 @@ class Modeller:
         return self
     
     def Predict(self, data: pd.DataFrame) -> dict:
-        return self.model.Predict(self.PrepareNewCovs(data))
+        return self.y.scaler.InverseTransform(
+            self.model.Predict(self.PrepareNewCovs(data))['y']
+        )
 
     def GetDecomposition(self):
         if self.decomposition is not None: 

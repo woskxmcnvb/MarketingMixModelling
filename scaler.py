@@ -57,4 +57,5 @@ class Scaler:
     
     def InverseTransform(self, data):
         #assert data.shape == self.fit_shape_
-        return data.add(self.centering_shift).mul(self.max_ - self.min_).add(self.min_)
+        #return data.add(self.centering_shift).mul(self.max_ - self.min_).add(self.min_)
+        return (data + self.centering_shift) * (self.max_ - self.min_) + self.min_
