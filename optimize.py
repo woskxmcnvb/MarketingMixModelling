@@ -6,6 +6,8 @@ from .definitions import *
 from .modeller import Modeller
 from .sales_model import SalesModel 
 
+############# media optimization utils ############# 
+
 def _check_fix_period(period: int | list | tuple, df: pd.DataFrame) -> slice:
     if (period is None) or (period is Ellipsis): 
          return Ellipsis
@@ -19,18 +21,20 @@ def _check_fix_period(period: int | list | tuple, df: pd.DataFrame) -> slice:
     else: 
         raise ValueError("Wrong period_to_optimize")
 
-def _check_fix_media_vars(vars_: list, modeller: Modeller) -> tuple:
-    for i in vars_: 
-        assert 0 <= i
-        assert i <= modeller.X.media_data.shape[-1]
-    return tuple(vars_)
-
-def _check_fix_non_media_vars(vars_: list, modeller: Modeller) -> tuple:
-    for i in vars_: 
-        assert 0 <= i
-        assert i <= modeller.X.non_media_data.shape[-1]
-    return tuple(vars_)
-
+def _get_var_index(vars_: list | str, modeller: Modeller) -> list:
+    if isinstance(vars_, str): 
+        vars_ = [vars_]
+    var_index = [i for i, (_, v) in enumerate(modeller.X.AllMediaVarnames()) if v in vars_]
+    if len(var_index) > 0: 
+        if len(var_index) != len(vars_):
+            raise ValueError("check variables to optimize. They must all be either from 'media' or 'non-media'")
+        return 'media', tuple(var_index)
+    
+    var_index = [i for i, (_, v) in enumerate(modeller.X.AllMediaVarnames()) if v in vars_]
+    if len(var_index) > 0: 
+        if len(var_index) != len(vars_):
+            raise ValueError("check variables to optimize. They must all be either from 'media' or 'non-media'")
+        return 'non-media', tuple(var_index)
 
 
 ############# media optimization begin ############# 
@@ -76,15 +80,24 @@ def _objective_function(
         X.media_data = X.media_data.at[opt_index].set(_redistribute_evenly(X.media_data[opt_index], media_allocation))
     return -jnp.sum(jnp.mean(modeller.model.PredictY(X)['y'], axis=0))
    
-def Optimize(df: pd.DataFrame, 
-             media_to_optimize_index: list,
+def OptimizeMediaAllocation(df: pd.DataFrame, 
+             media_to_optimize: list | str,
              period_to_optimize: int | list | None,
              modeller: Modeller, 
              keep_spend_pattern: bool = True):
+    """
+    df: dataframe to work with
+    media_to_optimize: media-vars to manipulate with: list of names
+    period_to_optimize: period to manipulate with and watch target. int - last x datapoints / list - from to / None - all 
+    modeller: fitted model
+    keep_spend_pattern: True - keep / False - redistribute evenly across period
+    """
     opt_index = (
         _check_fix_period(period_to_optimize, df), 
-        _check_fix_media_vars(media_to_optimize_index, modeller)
+        _get_var_index(media_to_optimize, modeller)[1]
     )
+
+    print("Variable index {}".format(opt_index[1]))
     
     X = modeller.PrepareNewCovs(df)
     _check_media_optimize_spec(opt_index, X, keep_spend_pattern)
@@ -92,6 +105,7 @@ def Optimize(df: pd.DataFrame,
     # getting starting values as historical means, not from new data
     starting_values = _get_starting_values(opt_index, modeller.X)
     bounds = _get_optimization_bounds(starting_values)
+    print("Starting values: {}, {}".format(starting_values, bounds))
 
     jax.config.update("jax_enable_x64", True)
 
@@ -165,28 +179,28 @@ def _target_function_media(
 def ReachTarget(df: pd.DataFrame,
                 relative_target: float,
                 period_to_adjust: int | list | None,
-                vars_to_adjust: list[int],
-                vars_type: str,
-                modeller: Modeller):
+                varnames_to_adjust: list[int],
+                modeller: Modeller,
+                adjust_bounds: float=0.5):
     """
     df: dataframe to work with
     relative_target: 1.1 means 10% increase vs. current etc.
     period_to_adjust: period to manipulate with and watch target. int - last x datapoints / list - from to / None - all 
-    vars_to_adjust: vars to manipulate with 
-    vars_type: 'media'/'non-media'
+    varnames_to_adjust: vars to manipulate with: list of names
     modeller: fitted model
     """
     
     period_to_adjust = _check_fix_period(period_to_adjust, df)
-    vars_to_adjust = _check_fix_non_media_vars(vars_to_adjust, modeller)
+    vars_type, vars_to_adjust = _get_var_index(varnames_to_adjust, modeller)
+    print("Variable type: {}, variable index{}".format(vars_type, vars_to_adjust))
     
     XX = modeller.PrepareNewCovs(df)
     current_value = modeller.model.PredictY(XX)['y'].mean(axis=0)[period_to_adjust].sum()
     target_value = float(relative_target * current_value)
-    starting_values = jnp.ones(len(vars_to_adjust))
-    bounds = scipy.optimize.Bounds(starting_values * 0.5, starting_values * 1.5)
-    print("Current value: {}, Target value: {}".format(current_value, target_value))
-    print("Starting values: {}, bounds: {}".format(starting_values, bounds))
+    starting_values = jnp.ones(1)
+    bounds = scipy.optimize.Bounds(starting_values * adjust_bounds, starting_values * (adjust_bounds + 1.0))
+    print("Current value: {}, Target value: {} (non-inverse-scaled)".format(current_value, target_value))
+    print("Starting values: {}, {}".format(starting_values, bounds))
 
     if vars_type == 'media':
         starting_data = XX.media_data.copy()
@@ -207,16 +221,16 @@ def ReachTarget(df: pd.DataFrame,
         modeller=modeller)
 
     return scipy.optimize.minimize(fun=partial_target_function,
-                                       x0=starting_values, 
-                                       method="SLSQP",
-                                       jac="3-point", 
-                                       bounds=bounds,
-                                       options={
-                                          "maxiter": 200,
-                                          "disp": True,
-                                          "ftol": 1e-06,
-                                          "eps": 1.4901161193847656e-08,
-                                          }
-                                      )
+                                    x0=starting_values, 
+                                    method="SLSQP",
+                                    jac="3-point", 
+                                    bounds=bounds,
+                                    options={
+                                        "maxiter": 200,
+                                        "disp": True,
+                                        "ftol": 1e-06,
+                                        "eps": 1.4901161193847656e-08,
+                                    }
+                                )
 
 ############# target reach end ############# 

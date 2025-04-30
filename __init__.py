@@ -1,5 +1,5 @@
 from .modeller import Modeller, PlotX
 from .smoother import Smoother
-from .optimize import Optimize, ReachTarget
+from .optimize import OptimizeMediaAllocation, ReachTarget
 from .validate import CompareModels
 from .definitions import ModelCovs
