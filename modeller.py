@@ -53,20 +53,7 @@ def IntervalPlot(data: pd.DataFrame, ax=None, title=None):
 
 
 
-def PlotX(X: ModelCovs): 
-        tiles_num = len(X.media_vars) + len(X.non_media_vars)
-        _, axs = plt.subplots(tiles_num, 1, figsize=(16, tiles_num * 2))
 
-        next_tile = 0
-        for var in X.media_vars:
-            pd.DataFrame(X.media_data[:, var.data_index], 
-                         columns=var.VarColumns()).plot.area(ax=axs[next_tile], linewidth=0, stacked=False)
-            next_tile = next_tile + 1
-        for var in X.non_media_vars:
-            pd.DataFrame(X.non_media_data[:, var.data_index], 
-                         columns=var.VarColumns()).plot.line(ax=axs[next_tile])
-            next_tile = next_tile + 1
-        plt.show()
 
 
             
@@ -111,10 +98,28 @@ class Modeller:
         ).Fit(self.X, self.y, show_progress=show_progress, num_samples=num_samples)
         return self
     
-    def Predict(self, data: pd.DataFrame) -> dict:
-        return self.y.scaler.InverseTransform(
-            self.model.Predict(self.PrepareNewCovs(data))['y']
-        )
+    def Predict(self, data: pd.DataFrame, return_decomposition=False) -> dict:
+        model_preds = self.model.Predict(self.PrepareNewCovs(data), return_decomposition=return_decomposition)
+        return {k: self.y.scaler.InverseTransform(v) for k, v in model_preds.items()}
+    
+    def _Decomposition_multiplicative(self, preds: dict) -> pd.DataFrame:
+        col_names = {
+            "y": [("y", "y")],
+            "base": [("base", "base")],
+        }
+        if self.X.HasMedia():
+            col_names["media short"] = [("Media short", v) for _, v in self.X.AllMediaVarnames()]
+            col_names["media long"] = [("Media long", v) for _, v in self.X.AllMediaVarnames()]
+        if self.X.HasNonMedia():
+            col_names["non-media"] = [("Non-media", v) for _, v in self.X.AllNonMediaVarnames()]
+
+        col_names = {k: pd.MultiIndex.from_tuples(v) for k, v in col_names.items()}
+
+        decomposition = pd.concat(
+            [pd.DataFrame(v.mean(axis=0), columns=col_names[k]) for k, v in preds.items() if k in col_names], 
+            axis=1
+        ).set_axis(self.input_df.index, axis=0)
+        return self.y.scaler.InverseTransform(decomposition)
 
     def GetDecomposition(self):
         if self.decomposition is not None: 

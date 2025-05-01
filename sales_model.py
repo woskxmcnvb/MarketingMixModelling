@@ -181,8 +181,7 @@ class SalesModel:
             seasonality_curr = seasonal[time_curr % self.seasonality["cycle"]] if self.seasonality else 0
             y_curr = numpyro.sample("y", dist.StudentT(2,
                 base_curr + struct_curr + seasonality_curr + media_curr.sum() + media_long_curr.sum(), 
-                #(1 + seasonality_curr) * (base_curr + struct_curr + media_curr.sum() + media_long_curr.sum()),
-                #base_curr * (seasonality_curr + struct_curr + media_curr.sum() + media_long_curr.sum()),
+                #base_curr * (1 + seasonality_curr + struct_curr + media_curr.sum() + media_long_curr.sum()),
                 noise_scale), 
                 obs=y_curr)
             
@@ -219,18 +218,14 @@ class SalesModel:
 
     
     def PredictY(self, X):
+        """
+        short-cut method for optimizer
+        """
         return self.pred_func_y(jax.random.PRNGKey(3), X)
     
     def Predict(self, X, return_decomposition=True): 
-        assert self.mcmc, "Run .Fit first"
         if return_decomposition:
-            return_sites = ['y', 'base', 'media short', 'media long', 'non-media']
+            return self.pred_func_decomp(jax.random.PRNGKey(3), X)
         else:
-            return_sites = ['y']
-        pred_func = numpyro.infer.Predictive(self.Model, 
-                                             posterior_samples=self.mcmc.get_samples(), 
-                                             return_sites=return_sites
-                                             )
-        self.sample_model = pred_func(jax.random.PRNGKey(3), X)
-        return self.sample_model
+            return self.pred_func_y(jax.random.PRNGKey(3), X)
     

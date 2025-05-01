@@ -346,8 +346,8 @@ class ModelCovs:
         for v in self.non_media_vars:
             _non_media_data.append(v.Transform(df))
 
-        self.media_data = jnp.column_stack(_media_data)
-        self.non_media_data = jnp.column_stack(_non_media_data)
+        self.media_data = jnp.column_stack(_media_data) if _media_data else None
+        self.non_media_data = jnp.column_stack(_non_media_data) if _non_media_data else None
         return self
     
     def AllMediaVarnames(self, suffix="") -> list:
