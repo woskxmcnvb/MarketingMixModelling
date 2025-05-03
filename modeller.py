@@ -92,6 +92,7 @@ class Modeller:
     def Fit(self, spec: dict, data: pd.DataFrame, show_progress=True, num_samples=1000):
         self.PrepNoFit(spec, data)
         self.model = SalesModel(
+            is_multiplicative=self.X.is_multiplicative,
             seasonality_spec=self.X.seasonality, 
             fixed_base=self.X.fixed_base, 
             long_term_retention=self.X.long_term_retention
@@ -122,9 +123,6 @@ class Modeller:
         return self.y.scaler.InverseTransform(decomposition)
 
     def GetDecomposition(self):
-        if self.decomposition is not None: 
-            return self.decomposition
-        
         sample = self.model.Predict(self.X)
 
         col_names = {

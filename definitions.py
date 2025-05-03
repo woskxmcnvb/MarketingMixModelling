@@ -270,7 +270,7 @@ class ModelCovs:
         
         # check must-keys
         missing_keys = []
-        for mk in ["name", "fixed base", "long-term retention", "X"]:
+        for mk in ["name", "fixed base", "long-term retention", "X", "model"]:
             if mk not in spec:
                 missing_keys.append(mk)
         assert len(missing_keys) == 0, "ERRROR! Check missing keys in spec {}.".format(missing_keys)
@@ -279,6 +279,11 @@ class ModelCovs:
         assert isinstance(spec["fixed base"], bool), "Wrong 'fixed base' value, bool is expected"
         self.fixed_base = spec["fixed base"]
 
+        # check model option 
+        assert spec["model"] in ['add', 'mult'], "Wrong 'model' value either 'add' or 'mult' is expected"
+        self.is_multiplicative = True if spec["model"]=="mult" else False
+
+        # check long-term retention 
         if isinstance(spec["long-term retention"], tuple) or isinstance(spec["long-term retention"], list):
             self.long_term_retention = list(spec["long-term retention"])
         elif spec["long-term retention"] == 1:

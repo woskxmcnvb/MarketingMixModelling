@@ -41,11 +41,13 @@ class SalesModel:
     # options
     fixed_base: bool = False
     long_term_retention: int | tuple = 1
+    is_multiplicative: bool
     
-    def __init__(self, seasonality_spec: dict=None, fixed_base: bool=False, long_term_retention: int | tuple = 1):
+    def __init__(self, is_multiplicative, seasonality_spec: dict=None, fixed_base: bool=False, long_term_retention: int | tuple = 1):
         self.seasonality = seasonality_spec.copy()
         self.fixed_base = fixed_base
         self.long_term_retention = long_term_retention
+        self.is_multiplicative = is_multiplicative
         if self.seasonality and (self.seasonality["model"] == 'fourier'):
             self.SeasonalityCovs = FourierCovs(self.seasonality["cycle"], self.seasonality["num_fouries_terms"])
     
@@ -179,11 +181,16 @@ class SalesModel:
             else:
                 base_curr = numpyro.sample("base", dist.Normal(base_prev, base_drift_scale))
             seasonality_curr = seasonal[time_curr % self.seasonality["cycle"]] if self.seasonality else 0
-            y_curr = numpyro.sample("y", dist.StudentT(2,
-                base_curr + struct_curr + seasonality_curr + media_curr.sum() + media_long_curr.sum(), 
-                #base_curr * (1 + seasonality_curr + struct_curr + media_curr.sum() + media_long_curr.sum()),
-                noise_scale), 
-                obs=y_curr)
+            if self.is_multiplicative:
+                y_curr = numpyro.sample("y", dist.StudentT(2,
+                    base_curr * (1 + seasonality_curr + struct_curr + media_curr.sum() + media_long_curr.sum()),
+                    noise_scale), 
+                    obs=y_curr)
+            else:
+                y_curr = numpyro.sample("y", dist.StudentT(2,
+                    base_curr + struct_curr + seasonality_curr + media_curr.sum() + media_long_curr.sum(), 
+                    noise_scale), 
+                    obs=y_curr)
             
             return (base_curr, media_curr, media_long_curr), y_curr 
 
@@ -225,7 +232,18 @@ class SalesModel:
     
     def Predict(self, X, return_decomposition=True): 
         if return_decomposition:
-            return self.pred_func_decomp(jax.random.PRNGKey(3), X)
+            if self.is_multiplicative:
+                return self._ConvertMultiplicativeDecomposition(self.pred_func_decomp(jax.random.PRNGKey(3), X))
+            else:
+                return self.pred_func_decomp(jax.random.PRNGKey(3), X)
         else:
             return self.pred_func_y(jax.random.PRNGKey(3), X)
+        
+    def _ConvertMultiplicativeDecomposition(self, preds):
+        preds['non-media'] = preds['base'][:, :, jnp.newaxis] * preds['non-media']
+        preds['media long'] = preds['base'][:, :, jnp.newaxis] * preds['media long']
+        preds['media short'] = preds['base'][:, :, jnp.newaxis] * preds['media short']
+        return preds
+
+
     
