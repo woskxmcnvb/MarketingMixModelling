@@ -109,25 +109,7 @@ class Modeller:
     
     def Predict(self, data: pd.DataFrame | ModelCovs, return_decomposition=False) -> dict:
         return {k: v.mean(axis=0) for k, v in self.GetPredictions(data, return_decomposition).items()}
-    
-    def _Decomposition_multiplicative(self, preds: dict) -> pd.DataFrame:
-        col_names = {
-            "y": [("y", "y")],
-            "base": [("base", "base")],
-        }
-        if self.X.HasMedia():
-            col_names["media short"] = [("Media short", v) for _, v in self.X.AllMediaVarnames()]
-            col_names["media long"] = [("Media long", v) for _, v in self.X.AllMediaVarnames()]
-        if self.X.HasNonMedia():
-            col_names["non-media"] = [("Non-media", v) for _, v in self.X.AllNonMediaVarnames()]
-
-        col_names = {k: pd.MultiIndex.from_tuples(v) for k, v in col_names.items()}
-
-        decomposition = pd.concat(
-            [pd.DataFrame(v.mean(axis=0), columns=col_names[k]) for k, v in preds.items() if k in col_names], 
-            axis=1
-        ).set_axis(self.input_df.index, axis=0)
-        return self.y.scaler.InverseTransform(decomposition)
+     
 
     def GetDecomposition(self):
         sample = self.model.Predict(self.X)

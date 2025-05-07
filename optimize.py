@@ -30,7 +30,7 @@ def _get_var_index(vars_: list | str, modeller: Modeller) -> list:
             raise ValueError("check variables to optimize. They must all be either from 'media' or 'non-media'")
         return 'media', tuple(var_index)
     
-    var_index = [i for i, (_, v) in enumerate(modeller.X.AllMediaVarnames()) if v in vars_]
+    var_index = [i for i, (_, v) in enumerate(modeller.X.AllNonMediaVarnames()) if v in vars_]
     if len(var_index) > 0: 
         if len(var_index) != len(vars_):
             raise ValueError("check variables to optimize. They must all be either from 'media' or 'non-media'")
@@ -243,7 +243,7 @@ def ReachTarget(df: pd.DataFrame,
     current_value = modeller.model.PredictY(XX)['y'].mean(axis=0)[period_to_adjust].sum()
     target_value = float(relative_target * current_value)
     starting_values = jnp.ones(1)
-    bounds = scipy.optimize.Bounds(starting_values * adjust_bounds, starting_values * (adjust_bounds + 1.0))
+    bounds = scipy.optimize.Bounds(starting_values * (1.0 - adjust_bounds), starting_values * (1.0 + adjust_bounds))
     print("Current value: {}, Target value: {} (non-inverse-scaled)".format(current_value, target_value))
     print("Starting values: {}, {}".format(starting_values, bounds))
 
