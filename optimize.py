@@ -46,12 +46,18 @@ def _check_media_optimize_spec(opt_index, X, keep_pattern):
             "Not enough spends for the period to keep pattern. Check shares {}".format(channel_shares)
 
 
-def _get_starting_values(opt_index: tuple, X) -> jnp.array: 
+def _get_starting_allocation(opt_index: tuple, X) -> jnp.array: 
     sum_ = X.media_data[opt_index].sum(axis=0)
     return sum_ / sum_.sum()
 
 def _constraints(alloc): 
     return jnp.sum(alloc) - 1
+
+@functools.partial(
+    jax.jit,
+    static_argnames=("prices", "budget"))
+def _budget_constraints(alloc, prices, budget): 
+    return jnp.sum(alloc * jnp.array(prices)) - budget
 
 def _get_optimization_bounds(historical_values) -> scipy.optimize.Bounds:
     return scipy.optimize.Bounds(jnp.zeros_like(historical_values), jnp.ones_like(historical_values))
@@ -79,11 +85,37 @@ def _objective_function(
     else: 
         X.media_data = X.media_data.at[opt_index].set(_redistribute_evenly(X.media_data[opt_index], media_allocation))
     return -jnp.sum(jnp.mean(modeller.model.PredictY(X)['y'], axis=0))
+
+def CalculateGains(df: pd.DataFrame,
+                   media_to_optimize: list[str],
+                   period_to_optimize: int | list | None,
+                   media_allocation: list,
+                   modeller: Modeller, 
+                   keep_spend_pattern: bool = True):
+    opt_index = (
+        _check_fix_period(period_to_optimize, df), 
+        _get_var_index(media_to_optimize, modeller)[1]
+    )
+    
+    y_before = modeller.Predict(df, return_decomposition=False)['y'][opt_index[0]].sum()
+    
+    X = modeller.PrepareNewCovs(df)
+    if keep_spend_pattern:
+        X.media_data = X.media_data.at[opt_index].set(_redistribute_keep_pattern(X.media_data[opt_index], jnp.array(media_allocation)))
+    else: 
+        X.media_data = X.media_data.at[opt_index].set(_redistribute_evenly(X.media_data[opt_index], jnp.array(media_allocation)))
+    
+    y_after = modeller.Predict(X, return_decomposition=False)['y'][opt_index[0]].sum()
+    print("Target metric...:")
+    print("...before: {}".format(y_before))
+    print("...after: {}".format(y_after))
+    print("Gain: {}".format(y_after / y_before - 1))
    
 def OptimizeMediaAllocation(df: pd.DataFrame, 
-             media_to_optimize: list | str,
+             media_to_optimize: list[str],
              period_to_optimize: int | list | None,
              modeller: Modeller, 
+             media_prices: list = None,
              keep_spend_pattern: bool = True):
     """
     df: dataframe to work with
@@ -99,22 +131,35 @@ def OptimizeMediaAllocation(df: pd.DataFrame,
 
     print("Variable index {}".format(opt_index[1]))
     
+    
     X = modeller.PrepareNewCovs(df)
     _check_media_optimize_spec(opt_index, X, keep_spend_pattern)
 
+    if media_prices is None: 
+        media_prices = jnp.ones_like(media_to_optimize)
+    else: 
+        assert len(media_to_optimize) == len(media_prices), "Expected: len(media_to_optimize) == len(media_prices)"
+        #media_prices = jnp.array(media_prices)
+
     # getting starting values as historical means, not from new data
-    starting_values = _get_starting_values(opt_index, modeller.X)
-    bounds = _get_optimization_bounds(starting_values)
-    print("Starting values: {}, {}".format(starting_values, bounds))
+    starting_allocation = _get_starting_allocation(opt_index, modeller.X)
+    media_budget = (starting_allocation * jnp.array(media_prices)).sum()
+    bounds = _get_optimization_bounds(starting_allocation)
+    print("Starting allocation: {}, {}".format(starting_allocation, bounds))
 
     jax.config.update("jax_enable_x64", True)
 
     partial_objective_function = functools.partial(
         _objective_function, 
         X=X, opt_index=opt_index, modeller=modeller, keep_spend_pattern=keep_spend_pattern)
+    
+    constraints_function = functools.partial(
+        _budget_constraints, 
+        prices=media_prices, budget=float(media_budget)
+    )
 
     opt_result = scipy.optimize.minimize(fun=partial_objective_function,
-                                       x0=starting_values, 
+                                       x0=starting_allocation, 
                                        method="SLSQP",
                                        jac="3-point", 
                                        bounds=bounds,
@@ -126,7 +171,7 @@ def OptimizeMediaAllocation(df: pd.DataFrame,
                                           },
                                       constraints={
                                           "type": "eq",
-                                          "fun": _constraints
+                                          "fun": constraints_function
                                           }
                                       )
     return opt_result

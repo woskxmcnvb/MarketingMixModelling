@@ -99,9 +99,16 @@ class Modeller:
         ).Fit(self.X, self.y, show_progress=show_progress, num_samples=num_samples)
         return self
     
-    def Predict(self, data: pd.DataFrame, return_decomposition=False) -> dict:
-        model_preds = self.model.Predict(self.PrepareNewCovs(data), return_decomposition=return_decomposition)
+    
+    def GetPredictions(self, data: pd.DataFrame | ModelCovs, return_decomposition=False) -> dict:
+        if isinstance(data, pd.DataFrame):
+            model_preds = self.model.Predict(self.PrepareNewCovs(data), return_decomposition=return_decomposition)
+        elif isinstance(data, ModelCovs): 
+            model_preds = self.model.Predict(data, return_decomposition=return_decomposition)
         return {k: self.y.scaler.InverseTransform(v) for k, v in model_preds.items()}
+    
+    def Predict(self, data: pd.DataFrame | ModelCovs, return_decomposition=False) -> dict:
+        return {k: v.mean(axis=0) for k, v in self.GetPredictions(data, return_decomposition).items()}
     
     def _Decomposition_multiplicative(self, preds: dict) -> pd.DataFrame:
         col_names = {
