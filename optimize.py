@@ -59,8 +59,10 @@ def _constraints(alloc):
 def _budget_constraints(alloc, prices, budget): 
     return jnp.sum(alloc * jnp.array(prices)) - budget
 
-def _get_optimization_bounds(historical_values) -> scipy.optimize.Bounds:
-    return scipy.optimize.Bounds(jnp.zeros_like(historical_values), jnp.ones_like(historical_values))
+def _get_optimization_bounds(historical_values, prices) -> scipy.optimize.Bounds:
+    media_prices = jnp.array(prices)
+    budget = (historical_values * media_prices).sum()
+    return scipy.optimize.Bounds(jnp.zeros_like(historical_values), budget / media_prices)
 
 @jax.jit
 def _redistribute_keep_pattern(media: jnp.array, allocation: jnp.array) -> jnp.array:
@@ -97,7 +99,11 @@ def CalculateGains(df: pd.DataFrame,
         _get_var_index(media_to_optimize, modeller)[1]
     )
     
-    y_before = modeller.Predict(df, return_decomposition=False)['y'][opt_index[0]].sum()
+    X = modeller.PrepareNewCovs(df)
+    starting_allocation = _get_starting_allocation(opt_index, X)
+    if keep_spend_pattern == False:
+        X.media_data = X.media_data.at[opt_index].set(_redistribute_evenly(X.media_data[opt_index], starting_allocation))
+    y_before = modeller.Predict(X, return_decomposition=False)['y'][opt_index[0]].sum()
     
     X = modeller.PrepareNewCovs(df)
     if keep_spend_pattern:
@@ -131,7 +137,6 @@ def OptimizeMediaAllocation(df: pd.DataFrame,
 
     print("Variable index {}".format(opt_index[1]))
     
-    
     X = modeller.PrepareNewCovs(df)
     _check_media_optimize_spec(opt_index, X, keep_spend_pattern)
 
@@ -144,7 +149,7 @@ def OptimizeMediaAllocation(df: pd.DataFrame,
     # getting starting values as historical means, not from new data
     starting_allocation = _get_starting_allocation(opt_index, modeller.X)
     media_budget = (starting_allocation * jnp.array(media_prices)).sum()
-    bounds = _get_optimization_bounds(starting_allocation)
+    bounds = _get_optimization_bounds(starting_allocation, media_prices)
     print("Starting allocation: {}, {}".format(starting_allocation, bounds))
 
     jax.config.update("jax_enable_x64", True)
@@ -279,3 +284,5 @@ def ReachTarget(df: pd.DataFrame,
                                 )
 
 ############# target reach end ############# 
+
+

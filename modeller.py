@@ -1,4 +1,5 @@
 import io
+from typing import List
 
 from copy import deepcopy
 
@@ -101,6 +102,9 @@ class Modeller:
     
     
     def GetPredictions(self, data: pd.DataFrame | ModelCovs, return_decomposition=False) -> dict:
+        """
+        MCMC sample прогнозов
+        """
         if isinstance(data, pd.DataFrame):
             model_preds = self.model.Predict(self.PrepareNewCovs(data), return_decomposition=return_decomposition)
         elif isinstance(data, ModelCovs): 
@@ -111,20 +115,26 @@ class Modeller:
         return {k: v.mean(axis=0) for k, v in self.GetPredictions(data, return_decomposition).items()}
      
 
-    def GetDecomposition(self):
+    def GetDecomposition(self) -> pd.DataFrame:
+        #### хорошо бы переписать чтобы принимал Х на входе 
+        
+        if self.decomposition is not None:
+            return self.decomposition
+        
         sample = self.model.Predict(self.X)
 
+        #### decomposition columns 
         col_names = {
             "y": [("y", "y")],
             "base": [("base", "base")],
         }
         if self.X.HasMedia():
-            col_names["media short"] = [("Media short", v) for _, v in self.X.AllMediaVarnames()]
-            col_names["media long"] = [("Media long", v) for _, v in self.X.AllMediaVarnames()]
+            col_names["media short"] = self.Decomposition_AllMediaShortColumns()
+            col_names["media long"] = self.Decomposition_AllMediaLongColumns()
         if self.X.HasNonMedia():
-            col_names["non-media"] = [("Non-media", v) for _, v in self.X.AllNonMediaVarnames()]
-
+            col_names["non-media"] = self.Decomposition_AllNonMediaColumns()
         col_names = {k: pd.MultiIndex.from_tuples(v) for k, v in col_names.items()}
+        #### decomposition columns
 
         decomposition = pd.concat(
             [pd.DataFrame(v.mean(axis=0), columns=col_names[k]) for k, v in sample.items() if k in col_names], 
@@ -133,20 +143,74 @@ class Modeller:
         self.decomposition = self.y.scaler.InverseTransform(decomposition)
         return self.decomposition
     
+    def Decomposition_AllMediaShortColumns(self) -> list:
+        """Возвращает список столбцов 'Media short' в декомпозиции. Удобно для построения графика"""
+        return [("Media short", v) for _, v in self.X.AllMediaVarnames()]
+
+    def Decomposition_AllMediaLongColumns(self) -> list:
+        """Возвращает список столбцов 'Media long' в декомпозиции. Удобно для построения графика"""
+        return [("Media long", v) for _, v in self.X.AllMediaVarnames()]
+    
+    def Decomposition_AllMediaColumns(self) -> list:
+        """Возвращает список всех 'Media...' столбцов в декомпозиции. Удобно для построения графика"""
+        return self.Decomposition_AllMediaShortColumns() + self.Decomposition_AllMediaLongColumns()
+    
+    def Decomposition_MediaColumnsByCampaign(self) -> dict:
+        """Возвращает словарь всех 'Media...' столбцов в декомпозиции. Удобно для построения графика"""
+        return {v: [('Media long', v), ('Media short', v)] for _, v in self.X.AllMediaVarnames()}
+    
+    def Decomposition_AllNonMediaColumns(self) -> list:
+        """Возвращает список всех 'Non nedia...' столбцов в декомпозиции. Удобно для построения графика"""
+        return [("Non media", v) for _, v in self.X.AllNonMediaVarnames()]
+    
+    def Decomposition_NonMediaByColumn(self) -> dict:
+        """Возвращает словарь всех 'Non media...' столбцов в декомпозиции. Удобно для построения графика"""
+        return {v: [('Non media', v)] for _, v in self.X.AllNonMediaVarnames()}
+    
     def ToArviZ(self):
         return az.from_numpyro(self.model.mcmc)
     
-    def GetSamples(self):
+    def GetSamples(self) -> dict:
         return self.model.mcmc.get_samples()
     
-    def SitesNames(self):
+    def SitesNames(self) -> list:
         return self.model.mcmc.get_samples().keys()
     
     
+    def CalculatePureMediaEfficiency(self, media_vars: List[str]) -> pd.Series:
+        """ 
+        ! Имеет смысл только в предположении что это GRP ! 
+        считаем эффективность медиа, ставя их в одинаковые календарные условия
+        каждой кампании выдается 1000 GRP, и одинаковый календарный план
+        вклад считаем на горизонте 1 год
+        media: список кампаний (столбцы в данных) 
+        """ 
 
+        for mv in media_vars:
+            assert mv in self.input_df.columns, "{} variable not in model".format(mv)
 
+        new_data = self.input_df.copy()
 
+        # обнуляем все медиа-переменные датасета, на случай если эффективность считается не по всем
+        new_data[self.X.AllMediaVarColumns()] = 0
 
+        # создаем одинаковый медиаплан на 1000GRP для всех 
+        media_plan = jnp.array([0, 50, 50, 100, 150, 200, 250, 150, 50], dtype=float)
+        new_data[media_vars] = jnp.tile(
+            jnp.pad(media_plan, (0, len(new_data)-len(media_plan))),
+            (len(media_vars), 1)).T
+        
+        # строим для него прогноз
+        preds = self.Predict(new_data, return_decomposition=True)
+        
+        # образаем на 52 недели
+        preds = {name: data[:52] for name, data in preds.items()}
+        
+        media_impacts = preds['media long'].sum(axis=0) + preds['media short'].sum(axis=0)
+        base_plus_nonmedia = preds['base'].sum() + preds['non-media'].sum()
+        
+        # эффективность = вклад / базовый уровень / на 1000 GRP
+        return pd.Series(media_impacts / base_plus_nonmedia, index=media_vars)
 
 
 
@@ -155,7 +219,7 @@ class Modeller:
 
     ########################## *********CHARTS *****************
 
-    def PlotInputs(self): 
+    def PlotInputs(self) -> None: 
         tiles_num = len(self.X.media_vars) + len(self.X.non_media_vars) + 1
         _, axs = plt.subplots(tiles_num, 1, figsize=(16, tiles_num * 2))
         if tiles_num == 1:

@@ -70,7 +70,7 @@ class VariableGroup:
             spec["scaling_min_max"] = None
             spec["scaling_from"] = spec["scaling"]
         else:
-            raise ValueError("Wrong 'scaling' {} in {}".format(spec["scaling"], spec["name"]))
+            raise ValueError("Wrong 'scaling' {} in {}. ['total', 'column', Int (max value for max scaler)] is expected".format(spec["scaling"], spec["name"]))
 
 
         if spec["type"] == "media":
@@ -113,7 +113,7 @@ class VariableGroup:
         assert isinstance(var, dict), "Variable format is not dict in {}".format(spec["name"])
         
         if "name" not in var: 
-            print("WARNING! No 'name' key in {}".format(var))
+            print("WARNING! No 'name' key in {}. Skipped".format(var))
             return False
 
         assert "column" in var, "Missing 'column' key in {}".format(spec["name"])
@@ -357,6 +357,9 @@ class ModelCovs:
     
     def AllMediaVarnames(self, suffix="") -> list:
         return sum([g.VarNamesAsTuples(suffix) for g in self.media_vars], [])
+    
+    def AllMediaVarColumns(self) -> list:
+        return sum([g.VarColumns() for g in self.media_vars], [])
     
     def AllNonMediaVarnames(self, suffix="") -> list:
         return sum([g.VarNamesAsTuples(suffix) for g in self.non_media_vars], [])
