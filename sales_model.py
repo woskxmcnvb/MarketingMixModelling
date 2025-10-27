@@ -152,7 +152,7 @@ class SalesModel:
 
         # non-media variables
         if len(X.non_media_vars) == 0:
-            non_media_covs = numpyro.deterministic("non-media", jnp.zeros((self.data_len, 1)))
+            non_media_covs = numpyro.deterministic("non-media", jnp.zeros((X.covs_len, 1)))
         else: 
             non_media_betas = []
             for vg in X.non_media_vars: 
