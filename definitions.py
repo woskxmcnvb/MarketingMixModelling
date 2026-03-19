@@ -50,7 +50,7 @@ class VariableGroup:
     def SetDataIndex(self, _from, _to):
         self.data_index = jnp.arange(_from, _to)
 
-    def CheckFixSpec(self, spec): 
+    def CheckFixSpec(self, spec: dict) -> dict: 
         for field in ["name", "type", "variables"]:
             assert field in spec, "Missing key '{}' in {}".format(field, spec["name"])
         
@@ -260,6 +260,7 @@ class ModelCovs:
 
     seasonality: dict = None
     fixed_base: bool = False
+    signal_to_noise_ratio: float = 0.01
     long_term_retention: int | tuple = 1
 
     def __init__(self, spec: dict):
@@ -278,6 +279,13 @@ class ModelCovs:
         # check fixed base option
         assert isinstance(spec["fixed base"], bool), "Wrong 'fixed base' value, bool is expected"
         self.fixed_base = spec["fixed base"]
+
+        if "signal to noise ratio" in spec:
+            assert isinstance(spec["signal to noise ratio"], float), "Wrong 'signal to noise format' in spec {}".format(spec["signal to noise ratio"])
+            self.signal_to_noise_ratio = spec["signal to noise ratio"]
+        else: 
+            # Uses default 0.01
+            pass
 
         # check model option 
         assert spec["model"] in ['add', 'mult'], "Wrong 'model' value either 'add' or 'mult' is expected"

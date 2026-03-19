@@ -40,12 +40,21 @@ class SalesModel:
 
     # options
     fixed_base: bool = False
+    signal_to_noise_ratio: float = 0.01
     long_term_retention: int | tuple = 1
     is_multiplicative: bool
     
-    def __init__(self, is_multiplicative, seasonality_spec: dict=None, fixed_base: bool=False, long_term_retention: int | tuple = 1):
-        self.seasonality = seasonality_spec.copy()
+    def __init__(self, 
+                 is_multiplicative, 
+                 seasonality_spec: dict=None, 
+                 fixed_base: bool=False, 
+                 signal_to_noise_ratio: float = 0.01, 
+                 long_term_retention: int | tuple = 1):
+        
+        if seasonality_spec is not None:
+            self.seasonality = seasonality_spec.copy()
         self.fixed_base = fixed_base
+        self.signal_to_noise_ratio = signal_to_noise_ratio
         self.long_term_retention = long_term_retention
         self.is_multiplicative = is_multiplicative
         if self.seasonality and (self.seasonality["model"] == 'fourier'):
@@ -57,8 +66,9 @@ class SalesModel:
         base_init =   numpyro.sample("base_init", dist.Beta(2, 2))
         
         if not self.fixed_base:
-            base_drift_scale = numpyro.sample("base_drift_scale", dist.HalfNormal(0.01))
+            base_drift_scale = numpyro.sample("base_drift_scale", dist.HalfNormal(self.signal_to_noise_ratio))
         noise_scale = numpyro.sample("noise_scale", dist.HalfCauchy(1))
+        #noise_scale = numpyro.sample("noise_scale", dist.StudentT(df=2, scale=1))
         
         if self.long_term_retention == 1: 
             retention_long = numpyro.deterministic("retention long", jnp.array(1))
@@ -140,13 +150,14 @@ class SalesModel:
                     )
         
             # предобработка медиа
-            alpha = jnp.concatenate(alpha)
-            gamma = jnp.concatenate(gamma)
             beta_short = jnp.concatenate(beta_short)
             beta_long = jnp.concatenate(beta_long)
             retention_short = jnp.concatenate(retention_short)
         
-            media_short_covs = _media_preprocess(X.media_data, alpha, gamma, beta_short)
+            if len(alpha) == 0:
+                media_short_covs = beta_short * X.media_data
+            else:
+                media_short_covs = _media_preprocess(X.media_data, jnp.concatenate(alpha), jnp.concatenate(gamma), beta_short)
             media_long_covs = beta_long * X.media_data
         
 

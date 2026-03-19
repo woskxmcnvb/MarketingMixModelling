@@ -13,11 +13,14 @@ from sklearn.preprocessing import MinMaxScaler
 numpyro.set_host_device_count(4)
 
 class Smoother:
+
+    signal_to_noise_ratio = 0.1
     
-    @staticmethod
-    def Model(data_len, seasonality, y=None):
+    def Model(self, data_len, seasonality, y=None):
         init_base = numpyro.sample("init_base", dist.Beta(2, 2))
-        drift_scale = numpyro.sample("drift_scale", dist.HalfNormal(0.01))
+        # экспериментировал в Байере
+        #drift_scale = numpyro.sample("drift_scale", dist.HalfNormal(0.01))
+        drift_scale = numpyro.sample("drift_scale", dist.HalfNormal(self.signal_to_noise_ratio))
         noise_scale = numpyro.sample("noise_scale", dist.HalfCauchy(1))
 
         def transition(carry, current):
@@ -47,12 +50,11 @@ class Smoother:
         _, y = numpyro.contrib.control_flow.scan(transition, init_base, (y, time_axis))    
         return y
     
-    @staticmethod
-    def __FitMCMC(data, seasonality=0): 
+    def __FitMCMC(self, data, seasonality=0): 
         if seasonality: 
             model_to_use = Smoother.Model_seasonal
         else:
-            model_to_use = Smoother.Model
+            model_to_use = self.Model
         
         mcmc = numpyro.infer.MCMC(
             numpyro.infer.NUTS(model_to_use), 
@@ -78,8 +80,7 @@ class Smoother:
             constant_values = np.nan
         )
     
-    @staticmethod
-    def __FitKalman(data_na_masked: np.array): 
+    def __FitKalman(self, data_na_masked: np.array): 
         return KalmanFilter(transition_matrices=[1], 
             observation_matrices=[1], 
             initial_state_mean = data_na_masked[:20].mean(),
@@ -87,36 +88,34 @@ class Smoother:
             em_vars=['transition_covariance', 'observation_covariance']
             ).em(data_na_masked, n_iter=5)
 
-    @staticmethod
-    def __SmoothKalman(data: np.array) -> np.array:
+    def __SmoothKalman(self, data: np.array) -> np.array:
         data_na_masked = np.ma.masked_array(data, np.isnan(data))
-        kf = Smoother.__FitKalman(data_na_masked)
+        kf = self.__FitKalman(data_na_masked)
         smoothed, _ = kf.smooth(data_na_masked)
         return smoothed.squeeze(-1)
     
-    @staticmethod
-    def __SmoothMCMC(data, seasonality=0):
+    def __SmoothMCMC(self, data, seasonality=0):
         minimum, maximum = data.min(), data.max()
-        mcmc = Smoother.__FitMCMC((data - minimum) / (maximum - minimum), seasonality=seasonality)
+        mcmc = self.__FitMCMC((data - minimum) / (maximum - minimum), seasonality=seasonality)
         return mcmc.get_samples()['base'].mean(axis=0) * (maximum - minimum) + minimum
     
-    @classmethod
-    def Smooth(self, data: np.array, method='kalman', seasonality=0) -> np.array: 
+    def Smooth(self, data: np.array, method='kalman', signal_to_noise_ratio=0.1, seasonality=0) -> np.array: 
         # method = "kalman"
         assert method in ['kalman', 'MCMC']
+
+        self.signal_to_noise_ratio = signal_to_noise_ratio
+
         if method == 'kalman':
             return self.__SmoothKalman(data)
         if method == 'MCMC':
-            return self.__SmoothMCMC(data, seasonality)
+            return self.__SmoothMCMC(data, seasonality=seasonality)
         
-    @classmethod
     def __Impute_array(self, data: np.array, method='kalman') -> np.array: 
         # method = "kalman"
         assert method in ['kalman'] #, 'MCMC']
         smoothed = self.Smooth(data, method=method)
         return np.where(np.isnan(data), smoothed, data)
 
-    @classmethod
     def Impute(self, data, method='kalman') -> np.array: 
         # method = "kalman"
         data = np.array(data)

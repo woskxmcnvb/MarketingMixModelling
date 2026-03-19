@@ -96,6 +96,7 @@ class Modeller:
             is_multiplicative=self.X.is_multiplicative,
             seasonality_spec=self.X.seasonality, 
             fixed_base=self.X.fixed_base, 
+            signal_to_noise_ratio=self.X.signal_to_noise_ratio,
             long_term_retention=self.X.long_term_retention
         ).Fit(self.X, self.y, show_progress=show_progress, num_samples=num_samples)
         return self
@@ -177,17 +178,20 @@ class Modeller:
         return self.model.mcmc.get_samples().keys()
     
     
-    def CalculatePureMediaEfficiency(self, media_vars: List[str]) -> pd.Series:
+    def CalculatePureMediaEfficiency(self, media_vars: List[str], timeframe: int=52) -> pd.Series:
         """ 
         ! Имеет смысл только в предположении что это GRP ! 
         считаем эффективность медиа, ставя их в одинаковые календарные условия
         каждой кампании выдается 1000 GRP, и одинаковый календарный план
         вклад считаем на горизонте 1 год
         media: список кампаний (столбцы в данных) 
+        timeframe: 12 | 52 (для месячных или недельных данных)
         """ 
 
         for mv in media_vars:
             assert mv in self.input_df.columns, "{} variable not in model".format(mv)
+        
+        assert timeframe in [12, 52], "12 - for monthly data, 52 - for weekly"
 
         new_data = self.input_df.copy()
 
@@ -195,7 +199,12 @@ class Modeller:
         new_data[self.X.AllMediaVarColumns()] = 0
 
         # создаем одинаковый медиаплан на 1000GRP для всех 
-        media_plan = jnp.array([0, 50, 50, 100, 150, 200, 250, 150, 50], dtype=float)
+        if timeframe == 12: 
+            media_plan = jnp.array([200, 700, 100], dtype=float)
+        elif timeframe == 52:
+            media_plan = jnp.array([0, 50, 50, 100, 150, 200, 250, 150, 50], dtype=float)
+        else: raise ValueError()
+
         new_data[media_vars] = jnp.tile(
             jnp.pad(media_plan, (0, len(new_data)-len(media_plan))),
             (len(media_vars), 1)).T
@@ -203,8 +212,8 @@ class Modeller:
         # строим для него прогноз
         preds = self.Predict(new_data, return_decomposition=True)
         
-        # образаем на 52 недели
-        preds = {name: data[:52] for name, data in preds.items()}
+        # образаем на timeframe
+        preds = {name: data[:timeframe] for name, data in preds.items()}
         
         media_impacts = preds['media long'].sum(axis=0) + preds['media short'].sum(axis=0)
         base_plus_nonmedia = preds['base'].sum() + preds['non-media'].sum()
