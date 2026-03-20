@@ -146,11 +146,11 @@ class Modeller:
     
     def Decomposition_AllMediaShortColumns(self) -> list:
         """Возвращает список столбцов 'Media short' в декомпозиции. Удобно для построения графика"""
-        return [("Media short", v) for _, v in self.X.AllMediaVarnames()]
+        return [("Media short", v) for _, v in self.X.MediaVarnames()]
 
     def Decomposition_AllMediaLongColumns(self) -> list:
         """Возвращает список столбцов 'Media long' в декомпозиции. Удобно для построения графика"""
-        return [("Media long", v) for _, v in self.X.AllMediaVarnames()]
+        return [("Media long", v) for _, v in self.X.MediaVarnames()]
     
     def Decomposition_AllMediaColumns(self) -> list:
         """Возвращает список всех 'Media...' столбцов в декомпозиции. Удобно для построения графика"""
@@ -158,15 +158,15 @@ class Modeller:
     
     def Decomposition_MediaColumnsByCampaign(self) -> dict:
         """Возвращает словарь всех 'Media...' столбцов в декомпозиции. Удобно для построения графика"""
-        return {v: [('Media long', v), ('Media short', v)] for _, v in self.X.AllMediaVarnames()}
+        return {v: [('Media long', v), ('Media short', v)] for _, v in self.X.MediaVarnames()}
     
     def Decomposition_AllNonMediaColumns(self) -> list:
         """Возвращает список всех 'Non nedia...' столбцов в декомпозиции. Удобно для построения графика"""
-        return [("Non media", v) for _, v in self.X.AllNonMediaVarnames()]
+        return [("Non media", v) for _, v in self.X.NonMediaVarnames()]
     
     def Decomposition_NonMediaByColumn(self) -> dict:
         """Возвращает словарь всех 'Non media...' столбцов в декомпозиции. Удобно для построения графика"""
-        return {v: [('Non media', v)] for _, v in self.X.AllNonMediaVarnames()}
+        return {v: [('Non media', v)] for _, v in self.X.NonMediaVarnames()}
     
     def ToArviZ(self):
         return az.from_numpyro(self.model.mcmc)
@@ -196,7 +196,7 @@ class Modeller:
         new_data = self.input_df.copy()
 
         # обнуляем все медиа-переменные датасета, на случай если эффективность считается не по всем
-        new_data[self.X.AllMediaVarColumns()] = 0
+        new_data[self.X.MediaVarColumns()] = 0
 
         # создаем одинаковый медиаплан на 1000GRP для всех 
         if timeframe == 12: 

@@ -363,14 +363,23 @@ class ModelCovs:
         self.non_media_data = jnp.column_stack(_non_media_data) if _non_media_data else None
         return self
     
-    def AllMediaVarnames(self, suffix="") -> list:
+    def MediaVarnames(self, suffix="") -> list:
         return sum([g.VarNamesAsTuples(suffix) for g in self.media_vars], [])
     
-    def AllMediaVarColumns(self) -> list:
+    def MediaVarIndex(self) -> dict:
+        return {v[1]: i for i, v in enumerate(self.MediaVarnames())}
+    
+    def MediaVarColumns(self) -> list:
         return sum([g.VarColumns() for g in self.media_vars], [])
     
-    def AllNonMediaVarnames(self, suffix="") -> list:
+    def NonMediaVarnames(self, suffix="") -> list:
         return sum([g.VarNamesAsTuples(suffix) for g in self.non_media_vars], [])
+    
+    def NonMediaVarIndex(self) -> dict:
+        return {v[1]: i for i, v in enumerate(self.NonMediaVarnames())}
+    
+    def AllVarnames(self) -> list:
+        return [v[1] for v in self.MediaVarnames() + self.NonMediaVarnames()]
     
     def HasMedia(self) -> bool:
         return len(self.media_vars) > 0

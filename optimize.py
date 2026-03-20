@@ -6,9 +6,11 @@ from .definitions import *
 from .modeller import Modeller
 from .sales_model import SalesModel 
 
+from typing import Dict, List, Tuple
+
 ############# media optimization utils ############# 
 
-def _check_fix_period(period: int | list | tuple, df: pd.DataFrame) -> slice:
+def _get_time_index(period: int | list | tuple, df: pd.DataFrame) -> slice:
     if (period is None) or (period is Ellipsis): 
          return Ellipsis
     if isinstance(period, int): 
@@ -22,15 +24,20 @@ def _check_fix_period(period: int | list | tuple, df: pd.DataFrame) -> slice:
         raise ValueError("Wrong period_to_optimize")
 
 def _get_var_index(vars_: list | str, modeller: Modeller) -> list:
+    """
+    проверяет на ошибки в списке
+    принимает как строку (одна переменная), так и список
+    """
+    # прин
     if isinstance(vars_, str): 
         vars_ = [vars_]
-    var_index = [i for i, (_, v) in enumerate(modeller.X.AllMediaVarnames()) if v in vars_]
+    var_index = [i for i, (_, v) in enumerate(modeller.X.MediaVarnames()) if v in vars_]
     if len(var_index) > 0: 
         if len(var_index) != len(vars_):
             raise ValueError("check variables to optimize. They must all be either from 'media' or 'non-media'")
         return 'media', tuple(var_index)
     
-    var_index = [i for i, (_, v) in enumerate(modeller.X.AllNonMediaVarnames()) if v in vars_]
+    var_index = [i for i, (_, v) in enumerate(modeller.X.NonMediaVarnames()) if v in vars_]
     if len(var_index) > 0: 
         if len(var_index) != len(vars_):
             raise ValueError("check variables to optimize. They must all be either from 'media' or 'non-media'")
@@ -88,21 +95,6 @@ def _objective_function(
         X.media_data = X.media_data.at[opt_index].set(_redistribute_evenly(X.media_data[opt_index], media_allocation))
     return -jnp.sum(jnp.mean(modeller.model.PredictY(X)['y'], axis=0))
 
-def ElasticityByVariable(df: pd.DataFrame,
-                         modeller: Modeller, 
-                         variable: str,
-                         period: int | list | None,
-                         elascitity_range: list[float]=[0.8, 0.9, 1.0, 1.1, 1.2],
-                        ) -> pd.DataFrame:
-    """
-    df: dataframe to work with / take the data used to build model
-    modeller: fitted model
-    variable: variable (colname) to calculate elasticity for
-    period: period to watch elasticity. int - last x datapoints / list - from to / None - all 
-    elascitity_range: poits to calc elasticity
-    """
-    target_values = [CalculateGains(df, [variable], period, [x], modeller) for x in elascitity_range]
-    return pd.concat([pd.Series(elascitity_range), pd.Series(target_values)], axis=1).set_axis([variable, "Target"], axis=1)
 
 def CalculateGains(df: pd.DataFrame,
                    media_to_optimize: list[str],
@@ -111,7 +103,7 @@ def CalculateGains(df: pd.DataFrame,
                    modeller: Modeller, 
                    keep_spend_pattern: bool = True) -> float:
     opt_index = (
-        _check_fix_period(period_to_optimize, df), 
+        _get_time_index(period_to_optimize, df), 
         _get_var_index(media_to_optimize, modeller)[1]
     )
     
@@ -148,7 +140,7 @@ def OptimizeMediaAllocation(df: pd.DataFrame,
     keep_spend_pattern: True - keep / False - redistribute evenly across period
     """
     opt_index = (
-        _check_fix_period(period_to_optimize, df), 
+        _get_time_index(period_to_optimize, df), 
         _get_var_index(media_to_optimize, modeller)[1]
     )
 
@@ -257,7 +249,7 @@ def ReachTarget(df: pd.DataFrame,
     modeller: fitted model
     """
     
-    period_to_adjust = _check_fix_period(period_to_adjust, df)
+    period_to_adjust = _get_time_index(period_to_adjust, df)
     vars_type, vars_to_adjust = _get_var_index(varnames_to_adjust, modeller)
     print("Variable type: {}, variable index{}".format(vars_type, vars_to_adjust))
     
@@ -301,5 +293,79 @@ def ReachTarget(df: pd.DataFrame,
                                 )
 
 ############# target reach end ############# 
+
+
+############# variables elasticity utils ############# 
+
+def _get_multipliers(mults: Dict, modeller) -> Tuple[jnp.array]:
+    """
+    перерабатывает словарь "имя переменной > множитель" в массивы множителей полной размерности 
+    """
+    
+    media_var_index = modeller.X.MediaVarIndex()
+    nonmedia_var_index = modeller.X.NonMediaVarIndex()
+
+    media_mults = [1.0] * len(media_var_index)
+    nonmedia_mults = [1.0] * len(nonmedia_var_index)
+
+    for v, m in mults.items():
+        if v in media_var_index:
+            media_mults[media_var_index[v]] = m
+        elif v in nonmedia_var_index:
+            nonmedia_mults[nonmedia_var_index[v]] = m
+        else:
+            raise ValueError("Unknown variable {}".format(v))
+    
+    return jnp.array(media_mults), jnp.array(nonmedia_mults)
+
+
+def MultCovsCalculateTraget(
+                   df: pd.DataFrame,
+                   modeller: Modeller,
+                   multipliers: Dict,
+                   period_to_apply: int | list | None,
+                   keep_time_pattern: bool = True) -> float:
+    """
+    на вход подается словарь множителей для каждой независимой переменной, и период к которому они применяютя
+    делает прогноз зависимой переменной, считает ее суммарное значение за тот же период 
+    
+    df: данные с независимыми переменными, необязательно те, на которых строилас модель 
+    modeller: обученная модель 
+    multipliers: словарь множителей
+    period_to_apply: период для которого применяются множители 
+    keep_time_pattern: True - не меняет распределение Х по времени / False - меняет
+    """
+    mult_media, mult_nonmedia = _get_multipliers(multipliers, modeller) 
+    time_index = _get_time_index(period_to_apply, df)
+
+    X = modeller.PrepareNewCovs(df)
+    if keep_time_pattern:
+        X.media_data = X.media_data.at[time_index].set(X.media_data[time_index] * mult_media)
+        X.non_media_data = X.non_media_data.at[time_index].set(X.non_media_data[time_index] * mult_nonmedia)
+    else: 
+        raise NotImplementedError()
+
+    return modeller.Predict(X, return_decomposition=False)['y'][time_index].sum()
+
+def ElasticityByVariable(
+        df: pd.DataFrame,
+        modeller: Modeller,
+        varible: str,
+        period_to_apply: int | List | None,
+        elasricyty_range: List[float] = [0.5, 0.8, 0.9, 1.0, 1.1, 1.2, 1.5],
+        keep_time_pattern: bool = True) -> float:
+    
+    target_values = []
+    for val in elasricyty_range:
+        target_values.append(
+            MultCovsCalculateTraget(
+                df=df, modeller=modeller,
+                multipliers={varible: val},
+                period_to_apply=period_to_apply,
+                keep_time_pattern=keep_time_pattern
+            )
+        )
+    return pd.concat([pd.Series(elasricyty_range), pd.Series(target_values)], axis=1)
+
 
 
