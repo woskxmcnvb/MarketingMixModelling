@@ -88,12 +88,28 @@ def _objective_function(
         X.media_data = X.media_data.at[opt_index].set(_redistribute_evenly(X.media_data[opt_index], media_allocation))
     return -jnp.sum(jnp.mean(modeller.model.PredictY(X)['y'], axis=0))
 
+def ElasticityByVariable(df: pd.DataFrame,
+                         modeller: Modeller, 
+                         variable: str,
+                         period: int | list | None,
+                         elascitity_range: list[float]=[0.8, 0.9, 1.0, 1.1, 1.2],
+                        ) -> pd.DataFrame:
+    """
+    df: dataframe to work with / take the data used to build model
+    modeller: fitted model
+    variable: variable (colname) to calculate elasticity for
+    period: period to watch elasticity. int - last x datapoints / list - from to / None - all 
+    elascitity_range: poits to calc elasticity
+    """
+    target_values = [CalculateGains(df, [variable], period, [x], modeller) for x in elascitity_range]
+    return pd.concat([pd.Series(elascitity_range), pd.Series(target_values)], axis=1).set_axis([variable, "Target"], axis=1)
+
 def CalculateGains(df: pd.DataFrame,
                    media_to_optimize: list[str],
                    period_to_optimize: int | list | None,
                    media_allocation: list,
                    modeller: Modeller, 
-                   keep_spend_pattern: bool = True):
+                   keep_spend_pattern: bool = True) -> float:
     opt_index = (
         _check_fix_period(period_to_optimize, df), 
         _get_var_index(media_to_optimize, modeller)[1]
@@ -116,6 +132,7 @@ def CalculateGains(df: pd.DataFrame,
     print("...before: {}".format(y_before))
     print("...after: {}".format(y_after))
     print("Gain: {}".format(y_after / y_before - 1))
+    return y_after / y_before - 1
    
 def OptimizeMediaAllocation(df: pd.DataFrame, 
              media_to_optimize: list[str],
