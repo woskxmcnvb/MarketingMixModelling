@@ -296,31 +296,44 @@ def ReachTarget(df: pd.DataFrame,
 ############# target reach end ############# 
 
 
+
+
+
+######################################################
 ############# variables elasticity utils ############# 
 
-def _get_multipliers(mults: Dict, modeller) -> Tuple[jnp.array]:
-    """
-    перерабатывает словарь "имя переменной > множитель" в массивы множителей полной размерности 
-    """
+
+def _get_time_index_pandas(period: int | list | tuple, df: pd.DataFrame) -> slice:
+    if (period is None) or (period is Ellipsis): 
+         return df.index
+    if isinstance(period, int): 
+        assert period <= len(df)
+        return df.index[-period:]
+    if isinstance(period, (tuple, list)):
+        assert len(period) == 2
+        assert (0 <= period[0]) and (period[1] <= len(df))
+        return df.index[period[0] : period[1]]
+    else: 
+        raise ValueError("Wrong period_to_optimize")
+
+
+def _prepare_multiplied_data(
+    df: pd.DataFrame, 
+    mults: Dict, 
+    period_to_apply: int | List | None = None, 
+    keep_time_pattern: bool = True) -> pd.DataFrame:
     
-    media_var_index = modeller.X.MediaVarIndex()
-    nonmedia_var_index = modeller.X.NonMediaVarIndex()
-
-    media_mults = [1.0] * len(media_var_index)
-    nonmedia_mults = [1.0] * len(nonmedia_var_index)
-
-    for v, m in mults.items():
-        if v in media_var_index:
-            media_mults[media_var_index[v]] = m
-        elif v in nonmedia_var_index:
-            nonmedia_mults[nonmedia_var_index[v]] = m
-        else:
-            raise ValueError("Unknown variable {}".format(v))
+    data = df.copy()
+    time_index = _get_time_index_pandas(period_to_apply, data)
     
-    return jnp.array(media_mults), jnp.array(nonmedia_mults)
+    for var, mult in mults.items():
+        if keep_time_pattern:
+            data.loc[time_index, var] = data.loc[time_index, var] * mult
+        else: 
+            data.loc[time_index, var] = data.loc[time_index, var].mean() * mult
 
-def _level_out_along_zero_axis(data: ArrayLike) -> ArrayLike:
-    return jnp.tile(data.mean(axis=0), (data.shape[0], 1))
+    return data
+
 
 def MultCovsCalculateTraget(
                    df: pd.DataFrame,
@@ -338,32 +351,25 @@ def MultCovsCalculateTraget(
     period_to_apply: период для которого применяются множители 
     keep_time_pattern: True - не меняет распределение Х по времени / False - меняет
     """
-    mult_media, mult_nonmedia = _get_multipliers(multipliers, modeller) 
-    time_index = _get_time_index(period_to_apply, df)
 
-    X = modeller.PrepareNewCovs(df)
-    if keep_time_pattern:
-        media_multiplied = X.media_data[time_index] * mult_media
-        non_media_multiplied = X.non_media_data[time_index] * mult_nonmedia
-    else: 
-        media_multiplied = _level_out_along_zero_axis(X.media_data[time_index]) * mult_media
-        non_media_multiplied = _level_out_along_zero_axis(X.non_media_data[time_index]) * mult_nonmedia
-    
-    X.media_data = X.media_data.at[time_index].set(media_multiplied)
-    X.non_media_data = X.non_media_data.at[time_index].set(non_media_multiplied)
+    array_time_index = _get_time_index(period_to_apply, df)
 
-    return modeller.Predict(X, return_decomposition=False)['y'][time_index].sum()
+    X = modeller.PrepareNewCovs(
+        _prepare_multiplied_data(df=df, mults=multipliers, period_to_apply=period_to_apply, keep_time_pattern=keep_time_pattern)
+    )
 
-def ElasticityByVariable(
+    return modeller.Predict(X, return_decomposition=False)['y'][array_time_index].sum()
+
+def _ElasticityByOneVariable(
         df: pd.DataFrame,
         modeller: Modeller,
         varible: str,
         period_to_apply: int | List | None,
-        elasricyty_range: List[float] = [0.5, 0.8, 0.9, 1.0, 1.1, 1.2, 1.5],
-        keep_time_pattern: bool = True) -> float:
+        elast_range: List[float] = [0.5, 0.8, 0.9, 1.0, 1.1, 1.2, 1.5],
+        keep_time_pattern: bool = True) -> pd.DataFrame:
     
     target_values = []
-    for val in elasricyty_range:
+    for val in elast_range:
         target_values.append(
             MultCovsCalculateTraget(
                 df=df, modeller=modeller,
@@ -372,7 +378,27 @@ def ElasticityByVariable(
                 keep_time_pattern=keep_time_pattern
             )
         )
-    return pd.concat([pd.Series(elasricyty_range, name=varible), pd.Series(target_values, name=modeller.y.Name())], axis=1)
+    return pd.concat([pd.Series(elast_range, name=varible), pd.Series(target_values, name=modeller.y.Name())], axis=1)
+
+
+def ElasticityByVariable(
+        df: pd.DataFrame,
+        modeller: Modeller,
+        varible: List[str],
+        period_to_apply: int | List | None,
+        elast_range: List[float] = [0.5, 0.8, 0.9, 1.0, 1.1, 1.2, 1.5],
+        keep_time_pattern: bool = True) -> pd.DataFrame:
+    
+    if isinstance(varible, str):
+        varible = [varible]
+    elif isinstance(varible, list):
+        pass
+    else:
+        raise ValueError("variable must be List or str. Check: {}".format(varible))
+    
+    return pd.concat(
+        [_ElasticityByOneVariable(df, modeller, v, period_to_apply, elast_range, keep_time_pattern) for v in varible]
+    , axis=1)
 
 
 
