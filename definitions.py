@@ -1,3 +1,5 @@
+from typing import Dict, List
+
 import pandas as pd
 import jax.numpy as jnp
 
@@ -236,14 +238,19 @@ class VariableGroup:
 class ModelTarget:
     y: jnp.array
     scaler: Scaler
+    name: str
 
     def __init__(self):
         pass
 
-    def Fit(self, spec: dict, df: pd.DataFrame):
+    def Name(self) -> str:
+        return self.name
+
+    def Fit(self, spec: Dict, df: pd.DataFrame):
         assert 'y' in spec, "ERRROR! 'y' not found in spec"
         assert isinstance(spec["y"], str), "Wrong 'y' format in spec"
 
+        self.name = spec["y"]
         self.scaler = Scaler(scaling='max_only', scaler_from='column').Fit(df[spec["y"]])
         self.y = jnp.array(Smoother().Impute(self.scaler.Transform(df[spec["y"]])))
         return self
@@ -252,18 +259,18 @@ class ModelTarget:
 class ModelCovs:
     covs_len: int
     
-    media_vars: list[VariableGroup]
+    media_vars: List[VariableGroup]
     media_data: jnp.array 
     
-    non_media_vars: list[VariableGroup]
+    non_media_vars: List[VariableGroup]
     non_media_data: jnp.array
 
-    seasonality: dict = None
+    seasonality: Dict = None
     fixed_base: bool = False
     signal_to_noise_ratio: float = 0.01
     long_term_retention: int | tuple = 1
 
-    def __init__(self, spec: dict):
+    def __init__(self, spec: Dict):
         # вынести отсюда работу с данными
         
         self.media_vars = []

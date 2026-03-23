@@ -7,6 +7,7 @@ from .modeller import Modeller
 from .sales_model import SalesModel 
 
 from typing import Dict, List, Tuple
+from jax.typing import ArrayLike
 
 ############# media optimization utils ############# 
 
@@ -318,6 +319,8 @@ def _get_multipliers(mults: Dict, modeller) -> Tuple[jnp.array]:
     
     return jnp.array(media_mults), jnp.array(nonmedia_mults)
 
+def _level_out_along_zero_axis(data: ArrayLike) -> ArrayLike:
+    return jnp.tile(data.mean(axis=0), (data.shape[0], 1))
 
 def MultCovsCalculateTraget(
                    df: pd.DataFrame,
@@ -340,10 +343,14 @@ def MultCovsCalculateTraget(
 
     X = modeller.PrepareNewCovs(df)
     if keep_time_pattern:
-        X.media_data = X.media_data.at[time_index].set(X.media_data[time_index] * mult_media)
-        X.non_media_data = X.non_media_data.at[time_index].set(X.non_media_data[time_index] * mult_nonmedia)
+        media_multiplied = X.media_data[time_index] * mult_media
+        non_media_multiplied = X.non_media_data[time_index] * mult_nonmedia
     else: 
-        raise NotImplementedError()
+        media_multiplied = _level_out_along_zero_axis(X.media_data[time_index]) * mult_media
+        non_media_multiplied = _level_out_along_zero_axis(X.non_media_data[time_index]) * mult_nonmedia
+    
+    X.media_data = X.media_data.at[time_index].set(media_multiplied)
+    X.non_media_data = X.non_media_data.at[time_index].set(non_media_multiplied)
 
     return modeller.Predict(X, return_decomposition=False)['y'][time_index].sum()
 
@@ -365,7 +372,7 @@ def ElasticityByVariable(
                 keep_time_pattern=keep_time_pattern
             )
         )
-    return pd.concat([pd.Series(elasricyty_range), pd.Series(target_values)], axis=1)
+    return pd.concat([pd.Series(elasricyty_range, name=varible), pd.Series(target_values, name=modeller.y.Name())], axis=1)
 
 
 
